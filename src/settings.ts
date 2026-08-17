@@ -332,6 +332,24 @@ export function fieldAllowsPull(mode: FieldSyncMode): boolean {
 	return mode === "both" || mode === "toObsidian";
 }
 
+/**
+ * Reads a status list from stored settings, whatever shape it is in.
+ *
+ * Earlier versions stored one string per status. Spreading that over the array
+ * defaults leaves a string where a list is expected, and every read of it then
+ * fails — so the conversion happens here, once, rather than being guarded at
+ * each use.
+ */
+function toStatusList(value: unknown, fallback: string[]): string[] {
+	const values = Array.isArray(value) ? value : [value];
+	const cleaned = values
+		.filter((entry): entry is string => typeof entry === "string")
+		.map((entry) => entry.trim())
+		.filter((entry) => entry.length > 0);
+
+	return cleaned.length > 0 ? cleaned : fallback;
+}
+
 /** Merges stored settings over the defaults, tolerating older shapes. */
 export function mergeSettings(stored: unknown): TickTickSyncSettings {
 	const raw = (stored ?? {}) as Partial<TickTickSyncSettings>;
@@ -345,8 +363,12 @@ export function mergeSettings(stored: unknown): TickTickSyncSettings {
 		listPages: { ...(raw.listPages ?? {}) },
 		taskMarker: { ...DEFAULT_SETTINGS.taskMarker, ...(raw.taskMarker ?? {}) },
 		labels: {
-			status: { ...DEFAULT_STATUS_LABELS, ...(raw.labels?.status ?? {}) },
-			statusNeutral: [...(raw.labels?.statusNeutral ?? DEFAULT_NEUTRAL_STATUSES)],
+			status: {
+				todo: toStatusList(raw.labels?.status?.todo, DEFAULT_STATUS_LABELS.todo),
+				completed: toStatusList(raw.labels?.status?.completed, DEFAULT_STATUS_LABELS.completed),
+				abandoned: toStatusList(raw.labels?.status?.abandoned, DEFAULT_STATUS_LABELS.abandoned),
+			},
+			statusNeutral: toStatusList(raw.labels?.statusNeutral, DEFAULT_NEUTRAL_STATUSES),
 			priority: { ...DEFAULT_PRIORITY_LABELS, ...(raw.labels?.priority ?? {}) },
 			// Merged rather than replaced, so adding a custom TRIGGER keeps the
 			// built-in names working.

@@ -136,12 +136,16 @@ function matchLabel<T extends string>(
 function matchStatusLabel(written: string, labels: ValueLabels): TaskStatus | undefined {
 	const wanted = written.trim().toLowerCase();
 	for (const [canonical, spellings] of Object.entries(labels.status) as [TaskStatus, string[]][]) {
+		// Defensive: a hand-edited settings file can put anything here, and one
+		// bad value must not take the whole sync down with it.
+		if (!Array.isArray(spellings)) continue;
 		if (spellings.some((value) => value.trim().toLowerCase() === wanted)) return canonical;
 	}
 	return undefined;
 }
 
 function isNeutralStatus(written: string, labels: ValueLabels): boolean {
+	if (!Array.isArray(labels.statusNeutral)) return false;
 	const wanted = written.trim().toLowerCase();
 	return labels.statusNeutral.some((value) => value.trim().toLowerCase() === wanted);
 }
@@ -154,7 +158,7 @@ function isNeutralStatus(written: string, labels: ValueLabels): boolean {
  * about the status actually moved.
  */
 function statusToWrite(status: TaskStatus, labels: ValueLabels, current?: string): string {
-	const spellings = labels.status[status] ?? [];
+	const spellings = Array.isArray(labels.status[status]) ? labels.status[status] : [];
 	if (current && matchStatusLabel(current, labels) === status) return current;
 	return spellings[0] ?? status;
 }
