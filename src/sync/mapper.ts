@@ -161,6 +161,31 @@ function matchLabel<T extends string>(
 	return undefined;
 }
 
+/**
+ * Reduces an iCal TRIGGER to a signed number of minutes.
+ *
+ * TickTick sends the same offset in more than one shape — `-PT30M` and
+ * `-P0DT0H30M0S` are both "thirty minutes before" — so matching the raw string
+ * names one reminder and leaves an identical one showing as a code.
+ */
+export function triggerToMinutes(trigger: string): number | undefined {
+	const match = /^\s*(?:TRIGGER:)?([+-]?)P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?\s*$/i.exec(
+		trigger,
+	);
+	if (!match) return undefined;
+
+	const [, sign, days, hours, minutes, seconds] = match;
+	if (!days && !hours && !minutes && !seconds) return undefined;
+
+	const total =
+		Number(days ?? 0) * 1440 +
+		Number(hours ?? 0) * 60 +
+		Number(minutes ?? 0) +
+		Number(seconds ?? 0) / 60;
+
+	return sign === "-" ? -total : total;
+}
+
 /** As {@link matchLabel}, but each status owns several accepted spellings. */
 function matchStatusLabel(written: string, labels: ValueLabels): TaskStatus | undefined {
 	const wanted = written.trim().toLowerCase();
@@ -375,9 +400,7 @@ export function taskToNote(
 	// A raw TRIGGER duration means nothing in a Properties panel, so named ones
 	// are written by name. Anything unnamed stays raw rather than being lost.
 	if (task.reminders.length > 0) {
-		frontmatter[p.reminders] = task.reminders.map(
-			(trigger) => labels.reminders[trigger] ?? trigger,
-		);
+		frontmatter[p.reminders] = task.reminders.map((trigger) => nameReminder(trigger, labels));
 	}
 	// Written as a wikilink so the relationship is navigable and shows in the
 	// graph. Falls back to the raw id only when the parent's note is unknown —
@@ -419,6 +442,21 @@ function readTags(value: unknown): string[] {
  * A value that matches no name is kept verbatim, so a TRIGGER written by hand
  * still works and an unrecognised one is never silently dropped.
  */
+/** The configured name for a trigger, matched on its duration rather than its text. */
+function nameReminder(trigger: string, labels: ValueLabels): string {
+	const exact = labels.reminders[trigger];
+	if (exact) return exact;
+
+	const minutes = triggerToMinutes(trigger);
+	if (minutes === undefined) return trigger;
+
+	for (const [known, label] of Object.entries(labels.reminders)) {
+		if (triggerToMinutes(known) === minutes) return label;
+	}
+
+	return trigger;
+}
+
 function readReminders(value: unknown, labels?: ValueLabels): string[] {
 	const written = readStringArray(value);
 	if (!labels) return written;

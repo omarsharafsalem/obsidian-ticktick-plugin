@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { blankTask, type Task } from "../src/api/types";
-import { DEFAULT_PROPERTIES } from "../src/settings";
+import { DEFAULT_PROPERTIES, DEFAULT_VALUE_LABELS } from "../src/settings";
 import {
 	buildBody,
 	noteToTask,
@@ -9,6 +9,7 @@ import {
 	sanitiseFilename,
 	splitBody,
 	taskToNote,
+	triggerToMinutes,
 	type MapperOptions,
 } from "../src/sync/mapper";
 
@@ -180,7 +181,11 @@ describe("round trip", () => {
 		expect(restored.tags).toEqual(original.tags);
 		expect(restored.dueDate).toBe(original.dueDate);
 		expect(restored.repeatFlag).toBe(original.repeatFlag);
-		expect(restored.reminders).toEqual(original.reminders);
+		// -PT60M and -PT1H are the same hour, so the round trip may return the
+		// canonical spelling. What must survive is the offset, not the text.
+		expect(restored.reminders.map(triggerToMinutes)).toEqual(
+			original.reminders.map(triggerToMinutes),
+		);
 
 		// A note stores subtasks as plain checkbox lines, so ids cannot survive
 		// the round trip on their own. Titles and completion must.
@@ -849,5 +854,48 @@ describe("property names from earlier versions", () => {
 		);
 
 		expect(parsed.id).toBe("new");
+	});
+});
+
+/**
+ * TickTick sends the same offset in more than one shape. Matching the raw
+ * string named one reminder and left an identical one showing as a code.
+ */
+describe("reminder names", () => {
+	const withNames: MapperOptions = {
+		...options,
+		labels: {
+			...DEFAULT_VALUE_LABELS,
+			reminders: { "TRIGGER:-PT30M": "30 minutes before", "TRIGGER:PT0S": "On time" },
+		},
+	};
+
+	it("reads a duration whichever way it is written", () => {
+		expect(triggerToMinutes("TRIGGER:-PT30M")).toBe(-30);
+		expect(triggerToMinutes("TRIGGER:-P0DT0H30M0S")).toBe(-30);
+		expect(triggerToMinutes("TRIGGER:-PT1H")).toBe(-60);
+		expect(triggerToMinutes("TRIGGER:-P1D")).toBe(-1440);
+	});
+
+	it("names the expanded form the same as the short one", () => {
+		const note = taskToNote(task({ reminders: ["TRIGGER:-P0DT0H30M0S"] }), withNames);
+		expect(note.frontmatter.reminders).toEqual(["30 minutes before"]);
+	});
+
+	it("names two spellings of the same offset identically", () => {
+		const note = taskToNote(
+			task({ reminders: ["TRIGGER:-PT30M", "TRIGGER:-P0DT0H30M0S"] }),
+			withNames,
+		);
+		expect(note.frontmatter.reminders).toEqual(["30 minutes before", "30 minutes before"]);
+	});
+
+	it("leaves an offset with no name as its raw trigger", () => {
+		const note = taskToNote(task({ reminders: ["TRIGGER:-PT45M"] }), withNames);
+		expect(note.frontmatter.reminders).toEqual(["TRIGGER:-PT45M"]);
+	});
+
+	it("ignores anything that is not a duration", () => {
+		expect(triggerToMinutes("TRIGGER:nonsense")).toBeUndefined();
 	});
 });

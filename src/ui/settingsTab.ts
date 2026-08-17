@@ -764,7 +764,8 @@ export class TickTickSettingTab extends PluginSettingTab {
 		new Setting(root)
 			.setName("Hide these properties")
 			.setDesc(
-				"Hidden from the Properties panel, one per line. The task ID is hidden by default: it " +
+				"Hidden from the Properties panel, one per line. The task ID is always hidden whatever it " +
+					"is called, so it does not need listing here: it " +
 					"has to stay in the note — it is what re-links a note to its task after a reset — but " +
 					"it is machine bookkeeping, not something to read. The value is still in the file, " +
 					"visible in Source mode; this only stops it cluttering the panel.",

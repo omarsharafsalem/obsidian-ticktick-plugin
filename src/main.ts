@@ -37,7 +37,7 @@ export default class TickTickSyncPlugin extends Plugin {
 			registerPropertyTypes(this.app, this.settings.properties, this.settings.dateProperties);
 		}
 
-		applyHiddenProperties(this.settings.hiddenProperties);
+		applyHiddenProperties(this.hiddenPropertyNames());
 
 		this.statusBar = this.addStatusBarItem();
 		this.setStatus("idle");
@@ -103,7 +103,7 @@ export default class TickTickSyncPlugin extends Plugin {
 		if (this.settings.registerPropertyTypes) {
 			registerPropertyTypes(this.app, this.settings.properties, this.settings.dateProperties);
 		}
-		applyHiddenProperties(this.settings.hiddenProperties);
+		applyHiddenProperties(this.hiddenPropertyNames());
 		this.restartTimer();
 	}
 
@@ -149,6 +149,17 @@ export default class TickTickSyncPlugin extends Plugin {
 			queue: this.queue,
 			getAccessToken: () => this.accessToken(),
 		});
+	}
+
+	/**
+	 * The properties to hide, always including the task id.
+	 *
+	 * The id is hidden by name, and the name is configurable — so hiding a fixed
+	 * string leaves it on screen for anyone whose property is called something
+	 * else. It is derived rather than listed for exactly that reason.
+	 */
+	private hiddenPropertyNames(): string[] {
+		return [...new Set([this.settings.properties.id, ...this.settings.hiddenProperties])];
 	}
 
 	/**
