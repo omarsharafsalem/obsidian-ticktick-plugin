@@ -249,6 +249,16 @@ export class TickTickSettingTab extends PluginSettingTab {
 		new V2LoginModal(this.app, (credentials) => {
 			if (!credentials) return;
 			void (async () => {
+				// A sign-in that works in a browser but not here is almost always
+				// the field never being captured, or stray whitespace from a paste.
+				// Only the shape is logged — never the password itself.
+				this.plugin.log("Sign-on attempt", {
+					email: credentials.username,
+					emailLength: credentials.username.length,
+					passwordLength: credentials.password.length,
+					passwordHasEdgeWhitespace: credentials.password !== credentials.password.trim(),
+				});
+
 				try {
 					const session = await v2SignOn(
 						this.plugin.queue,

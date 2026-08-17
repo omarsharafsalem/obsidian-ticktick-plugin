@@ -55,8 +55,8 @@ export class PasteCodeModal extends Modal {
 
 /** Username and password prompt for the unofficial v2 sign-on. */
 export class V2LoginModal extends Modal {
-	private username = "";
-	private password = "";
+	private usernameEl?: HTMLInputElement;
+	private passwordEl?: HTMLInputElement;
 
 	constructor(
 		app: App,
@@ -76,34 +76,53 @@ export class V2LoginModal extends Modal {
 		});
 
 		new Setting(contentEl).setName("Email").addText((text) => {
-			// Trimmed because an address pasted from a password manager often
-			// carries a trailing space, and TickTick reports that as a password
-			// mismatch rather than an unknown account. Passwords are left exactly
-			// as typed, since whitespace can be part of one.
-			text.onChange((value) => (this.username = value.trim()));
+			this.usernameEl = text.inputEl;
+			text.inputEl.autocomplete = "username";
+			text.inputEl.addEventListener("keydown", (event) => this.onKeyDown(event));
 		});
 
 		new Setting(contentEl).setName("Password").addText((text) => {
 			text.inputEl.type = "password";
-			text.onChange((value) => (this.password = value));
+			this.passwordEl = text.inputEl;
+			text.inputEl.autocomplete = "current-password";
+			text.inputEl.addEventListener("keydown", (event) => this.onKeyDown(event));
 		});
 
 		new Setting(contentEl)
-			.addButton((button) =>
-				button
-					.setButtonText("Sign in")
-					.setCta()
-					.onClick(() => {
-						this.onSubmit({ username: this.username, password: this.password });
-						this.close();
-					}),
-			)
+			.addButton((button) => button.setButtonText("Sign in").setCta().onClick(() => this.submit()))
 			.addButton((button) =>
 				button.setButtonText("Cancel").onClick(() => {
 					this.onSubmit(null);
 					this.close();
 				}),
 			);
+	}
+
+	private onKeyDown(event: KeyboardEvent): void {
+		if (event.key !== "Enter") return;
+		event.preventDefault();
+		this.submit();
+	}
+
+	/**
+	 * Reads the fields at submit time rather than tracking `onChange`.
+	 *
+	 * A password filled in by a password manager is often set on the element
+	 * directly and never fires an `input` event, so an `onChange` handler would
+	 * still hold an empty string. TickTick reports that as
+	 * `username_password_not_match`, which looks exactly like a wrong password
+	 * and sends you looking in the wrong place.
+	 *
+	 * The email is trimmed because a pasted address often carries a trailing
+	 * space. The password is not, since whitespace can legitimately be part of
+	 * one.
+	 */
+	private submit(): void {
+		this.onSubmit({
+			username: this.usernameEl?.value.trim() ?? "",
+			password: this.passwordEl?.value ?? "",
+		});
+		this.close();
 	}
 
 	onClose(): void {
