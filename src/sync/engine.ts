@@ -222,6 +222,14 @@ export class SyncEngine {
 			}
 		}
 
+		this.deps.log("Fetched from TickTick", {
+			lists: projects.map((p) => p.name),
+			tasks: remote.size,
+			// Titles and ids together, so a note that reappeared can be checked
+			// against what the account actually still holds.
+			titles: [...remote.values()].map((r) => `${r.task.title} — ${r.task.id}`),
+		});
+
 		return remote;
 	}
 
