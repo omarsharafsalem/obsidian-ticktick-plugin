@@ -76,7 +76,11 @@ export class V2LoginModal extends Modal {
 		});
 
 		new Setting(contentEl).setName("Email").addText((text) => {
-			text.onChange((value) => (this.username = value));
+			// Trimmed because an address pasted from a password manager often
+			// carries a trailing space, and TickTick reports that as a password
+			// mismatch rather than an unknown account. Passwords are left exactly
+			// as typed, since whitespace can be part of one.
+			text.onChange((value) => (this.username = value.trim()));
 		});
 
 		new Setting(contentEl).setName("Password").addText((text) => {
