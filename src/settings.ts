@@ -24,6 +24,14 @@ export interface PropertyNames {
 	parent: string;
 	/** Links to the tasks whose parent is this one. Derived, never read back. */
 	children: string;
+	/**
+	 * Whether the task is all-day rather than scheduled at a time.
+	 *
+	 * Explicit rather than inferred from the date's shape: once `due` is
+	 * registered as a datetime, Obsidian normalises a bare `2026-08-20` to
+	 * include a time, and every all-day task would silently become timed.
+	 */
+	allDay: string;
 }
 
 export const DEFAULT_PROPERTIES: PropertyNames = {
@@ -40,6 +48,7 @@ export const DEFAULT_PROPERTIES: PropertyNames = {
 	completed: "completed",
 	parent: "parent_task",
 	children: "child_tasks",
+	allDay: "all_day",
 };
 
 /**
@@ -48,8 +57,6 @@ export const DEFAULT_PROPERTIES: PropertyNames = {
  * rather than treating everything as text.
  */
 export const PROPERTY_TYPES: Partial<Record<keyof PropertyNames, string>> = {
-	due: "date",
-	start: "date",
 	completed: "datetime",
 	tags: "tags",
 	reminders: "multitext",
@@ -62,6 +69,7 @@ export const PROPERTY_TYPES: Partial<Record<keyof PropertyNames, string>> = {
 	project: "multitext",
 	parent: "text",
 	children: "multitext",
+	allDay: "checkbox",
 };
 
 /**
@@ -184,6 +192,14 @@ export interface TickTickSyncSettings {
 	 */
 	syncCompletedTasks: boolean;
 
+	/**
+	 * Whether due and start render with a time as well as a date.
+	 *
+	 * A property type is global to its name in Obsidian, so this cannot vary per
+	 * task: pick "datetime" if any of your tasks are time-blocked.
+	 */
+	dateProperties: "date" | "datetime";
+
 	properties: PropertyNames;
 	/** The vocabulary those properties use. See {@link ValueLabels}. */
 	labels: ValueLabels;
@@ -216,6 +232,7 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	syncOnStartup: true,
 	projectFilter: [],
 	listFolders: {},
+	dateProperties: "datetime",
 	syncCompletedTasks: false,
 	properties: { ...DEFAULT_PROPERTIES },
 	labels: {

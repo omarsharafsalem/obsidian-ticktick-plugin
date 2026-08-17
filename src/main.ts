@@ -32,7 +32,7 @@ export default class TickTickSyncPlugin extends Plugin {
 		await this.loadPersisted();
 
 		if (this.settings.registerPropertyTypes) {
-			registerPropertyTypes(this.app, this.settings.properties);
+			registerPropertyTypes(this.app, this.settings.properties, this.settings.dateProperties);
 		}
 
 		this.statusBar = this.addStatusBarItem();
@@ -96,7 +96,7 @@ export default class TickTickSyncPlugin extends Plugin {
 	async saveSettings(): Promise<void> {
 		await this.persist();
 		if (this.settings.registerPropertyTypes) {
-			registerPropertyTypes(this.app, this.settings.properties);
+			registerPropertyTypes(this.app, this.settings.properties, this.settings.dateProperties);
 		}
 		this.restartTimer();
 	}

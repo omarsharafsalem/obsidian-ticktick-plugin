@@ -351,6 +351,58 @@ describe("value labels", () => {
 	});
 });
 
+describe("the all-day flag", () => {
+	it("marks an all-day task explicitly", () => {
+		const note = taskToNote(task({ dueDate: "2026-08-20T00:00:00.000Z", isAllDay: true }), options);
+		expect(note.frontmatter.all_day).toBe(true);
+	});
+
+	it("leaves the flag off a timed task", () => {
+		const note = taskToNote(task({ dueDate: "2026-08-20T09:30:00.000Z", isAllDay: false }), options);
+		expect(note.frontmatter.all_day).toBeUndefined();
+	});
+
+	// Once due is registered as a datetime, Obsidian rewrites a bare date to
+	// include a time. Without the explicit flag the task would look scheduled.
+	it("trusts the flag over the shape of the date", () => {
+		const parsed = noteToTask(
+			{ frontmatter: { due: "2026-08-20T00:00:00.000Z", all_day: true }, body: "" },
+			"Buy milk",
+			options,
+		);
+
+		expect(parsed.isAllDay).toBe(true);
+	});
+
+	it("treats an explicit false as timed even for a bare date", () => {
+		const parsed = noteToTask(
+			{ frontmatter: { due: "2026-08-20", all_day: false }, body: "" },
+			"Buy milk",
+			options,
+		);
+
+		expect(parsed.isAllDay).toBe(false);
+	});
+
+	it("falls back to the date's shape when the flag is absent", () => {
+		expect(
+			noteToTask({ frontmatter: { due: "2026-08-20" }, body: "" }, "x", options).isAllDay,
+		).toBe(true);
+		expect(
+			noteToTask({ frontmatter: { due: "2026-08-20T09:30:00.000Z" }, body: "" }, "x", options)
+				.isAllDay,
+		).toBe(false);
+	});
+
+	it("round-trips a timed task without losing the time", () => {
+		const original = task({ dueDate: "2026-08-20T14:30:00.000Z", isAllDay: false });
+		const parsed = noteToTask(taskToNote(original, options), "Buy milk", options);
+
+		expect(parsed.dueDate).toBe("2026-08-20T14:30:00.000Z");
+		expect(parsed.isAllDay).toBe(false);
+	});
+});
+
 describe("parent and child links", () => {
 	it("writes the parent as a wikilink", () => {
 		const note = taskToNote(task({ parentId: "p-1" }), options, {

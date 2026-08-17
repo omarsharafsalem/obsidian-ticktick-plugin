@@ -226,6 +226,11 @@ export function taskToNote(
 	const due = toFrontmatterDate(task.dueDate, task.isAllDay);
 	if (due) frontmatter[p.due] = due;
 
+	// Recorded explicitly rather than left to be inferred from the date's shape:
+	// with `due` registered as a datetime, Obsidian rewrites a bare date to
+	// include a time, and the task would look scheduled when it is not.
+	if (task.isAllDay) frontmatter[p.allDay] = true;
+
 	const start = toFrontmatterDate(task.startDate, task.isAllDay);
 	if (start) frontmatter[p.start] = start;
 
@@ -413,9 +418,14 @@ export function noteToTask(
 	const startDate = fromFrontmatterDate(startRaw);
 
 	// A date written without a time means an all-day task.
+	// The explicit flag wins. Falling back to the date's shape keeps notes
+	// written before the property existed, and hand-written ones, working.
+	const allDayFlag = readScalar(fm[p.allDay]);
 	const isAllDay =
-		(dueDate !== undefined && looksAllDay(dueRaw)) ||
-		(dueDate === undefined && startDate !== undefined && looksAllDay(startRaw));
+		typeof allDayFlag === "boolean"
+			? allDayFlag
+			: (dueDate !== undefined && looksAllDay(dueRaw)) ||
+				(dueDate === undefined && startDate !== undefined && looksAllDay(startRaw));
 
 	const propertyTags = readTags(fm[p.tags]);
 	// Inline tags are unioned in, so `#work🔥` typed in the body reaches TickTick

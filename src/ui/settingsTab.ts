@@ -42,6 +42,7 @@ const PROPERTY_LABELS: Record<keyof PropertyNames, string> = {
 	completed: "Completed at",
 	parent: "Parent task",
 	children: "Child tasks",
+	allDay: "All-day flag",
 };
 
 export class TickTickSettingTab extends PluginSettingTab {
@@ -512,6 +513,23 @@ export class TickTickSettingTab extends PluginSettingTab {
 				"and queryable from Dataview or Bases. Rename any of them to match your vault.",
 			cls: "setting-item-description",
 		});
+
+		new Setting(root)
+			.setName("Due and start show")
+			.setDesc(
+				"Whether the date properties carry a time. Obsidian applies a property's type by name, " +
+					"so this cannot differ per task — choose 'Date and time' if any of your tasks are " +
+					"time-blocked. All-day tasks stay marked as all-day either way.",
+			)
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions({ datetime: "Date and time", date: "Date only" })
+					.setValue(settings.dateProperties)
+					.onChange(async (value) => {
+						settings.dateProperties = value as typeof settings.dateProperties;
+						await this.plugin.saveSettings();
+					}),
+			);
 
 		new Setting(root)
 			.setName("Register property types")

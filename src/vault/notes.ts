@@ -180,7 +180,11 @@ export function taskNotePath(
  * guarded — a future Obsidian release that drops it degrades to untyped
  * properties rather than breaking the plugin.
  */
-export function registerPropertyTypes(app: App, properties: PropertyNames): void {
+export function registerPropertyTypes(
+	app: App,
+	properties: PropertyNames,
+	dateType: "date" | "datetime" = "datetime",
+): void {
 	const manager = (
 		app as unknown as {
 			metadataTypeManager?: { setType?: (name: string, type: string) => void };
@@ -189,7 +193,15 @@ export function registerPropertyTypes(app: App, properties: PropertyNames): void
 
 	if (!manager || typeof manager.setType !== "function") return;
 
-	for (const [key, type] of Object.entries(PROPERTY_TYPES)) {
+	// A property's type is global to its name, so due and start cannot be a plain
+	// date on one task and a datetime on another — hence the single setting.
+	const types: Partial<Record<keyof PropertyNames, string>> = {
+		...PROPERTY_TYPES,
+		due: dateType,
+		start: dateType,
+	};
+
+	for (const [key, type] of Object.entries(types)) {
 		const name = properties[key as keyof PropertyNames];
 		if (!name) continue;
 		try {
