@@ -43,6 +43,7 @@ const PROPERTY_LABELS: Record<keyof PropertyNames, string> = {
 	parent: "Parent task",
 	children: "Child tasks",
 	allDay: "All-day flag",
+	deleted: "Deleted in TickTick at",
 };
 
 export class TickTickSettingTab extends PluginSettingTab {
@@ -651,10 +652,30 @@ export class TickTickSettingTab extends PluginSettingTab {
 		root.createEl("h2", { text: "Conflicts" });
 
 		new Setting(root)
+			.setName("When a task is deleted in TickTick")
+			.setDesc(
+				"Clearing out finished tasks in TickTick is housekeeping, and the note is often the only " +
+					"record that the work happened — so by default the note stays. It is stamped with the " +
+					"date TickTick lost it and stops syncing, rather than being recreated as a new task.",
+			)
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions({
+						keepNote: "Keep the note as a record",
+						deleteNote: "Delete the note too",
+					})
+					.setValue(settings.remoteDeletion)
+					.onChange(async (value) => {
+						settings.remoteDeletion = value as typeof settings.remoteDeletion;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(root)
 			.setName("When both sides changed the same field")
 			.setDesc(
-				"'Most recently edited' needs modification times, which only advanced mode provides; " +
-					"on the official API it falls back to preferring TickTick.",
+				"'Most recently edited' needs per-task modification times, which the Open API does not " +
+					"provide, so it currently falls back to preferring TickTick.",
 			)
 			.addDropdown((dropdown) =>
 				dropdown

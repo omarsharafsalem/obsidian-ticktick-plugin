@@ -2,7 +2,7 @@ import type { TFile } from "obsidian";
 import type { TickTickClient } from "../api/client";
 import { blankTask, type NewTask, type Project, type Task } from "../api/types";
 import type { TickTickSyncSettings } from "../settings";
-import { NoteRepository, taskNotePath } from "../vault/notes";
+import { NoteRepository, parentFolder, taskNotePath } from "../vault/notes";
 import { applyFieldModes } from "./fieldModes";
 import {
 	noteToTask,
@@ -210,6 +210,18 @@ export class SyncEngine {
 			resolveTaskLink: this.links.resolveTaskLink,
 		};
 
+		// Folders mapped to a list, longest first so a nested mapping wins over the
+		// folder containing it. Moving a note into one of these moves the task.
+		const foldersToList = Object.entries(settings.listFolders)
+			.map(([projectId, folder]) => ({ projectId, folder: folder.trim().replace(/\/+$/, "") }))
+			.filter((entry) => entry.folder !== "")
+			.sort((a, b) => b.folder.length - a.folder.length);
+
+		const listForPath = (path: string): string | undefined =>
+			foldersToList.find(
+				(entry) => path === entry.folder || path.startsWith(`${entry.folder}/`),
+			)?.projectId;
+
 		const result: LocalNote[] = [];
 		const skipped: string[] = [];
 
@@ -218,6 +230,10 @@ export class SyncEngine {
 				const note = await notes.read(file);
 				const parsed = noteToTask(note, note.title, mapperOptions);
 
+				// Its task was deleted in TickTick and the note was kept as a record.
+				// Left entirely alone: syncing it again would recreate the task.
+				if (note.frontmatter[settings.properties.deleted]) continue;
+
 				// A note already carrying a task id stays a task whatever else
 				// changed, so an edit to the marker cannot orphan a synced note.
 				if (!parsed.id && markerActive && !matchesMarker(note.frontmatter, marker)) {
@@ -225,12 +241,23 @@ export class SyncEngine {
 					continue;
 				}
 
+				// A note sitting in a folder mapped to a list belongs to that list,
+				// so dragging it between mapped folders moves the task in TickTick.
+				const folderList = listForPath(file.path);
+				const projectId = folderList ?? parsed.projectId ?? "";
+				if (folderList && folderList !== parsed.projectId) {
+					this.deps.log("Note is in a folder mapped to another list", {
+						note: file.path,
+						list: folderList,
+					});
+				}
+
 				result.push({
 					file,
 					taskId: parsed.id,
 					mtime: note.mtime,
 					snapshot: toSnapshot(
-						parsedNoteToTask(parsed, blankTask(parsed.projectId ?? "")),
+						parsedNoteToTask({ ...parsed, projectId }, blankTask(projectId)),
 					),
 				});
 			} catch (error) {
@@ -394,6 +421,7 @@ export class SyncEngine {
 			{
 				conflictPolicy: settings.conflictPolicy,
 				deleteConflictPolicy: settings.deleteConflictPolicy,
+				remoteDeletion: settings.remoteDeletion,
 				baseFields: masked?.baseFields,
 				localModifiedAt: localNote?.mtime,
 				remoteModifiedAt: remoteRecord?.task.modifiedTime
@@ -434,7 +462,7 @@ export class SyncEngine {
 		report: SyncReport;
 	}): Promise<void> {
 		const { action, taskId, entry, localNote, remoteRecord, projectNames, report } = context;
-		const { store, notes, client } = this.deps;
+		const { store, notes, client, settings } = this.deps;
 
 		switch (action.kind) {
 			case "noop":
@@ -498,6 +526,21 @@ export class SyncEngine {
 
 				const file = await this.writeNote(localNote.file, merged, projectNames);
 				store.set(this.entryFor(merged, file.path, action.snapshot, file.stat.mtime));
+				return;
+			}
+
+			case "orphanLocal": {
+				// The task is gone from TickTick but the note is the record of the
+				// work, so it stays. Stamping it stops it syncing again — without
+				// that it would look like a brand new note and be pushed straight
+				// back to TickTick as a fresh task.
+				if (localNote) {
+					const marked = await notes.read(localNote.file);
+					marked.frontmatter[settings.properties.deleted] = new Date().toISOString();
+					await notes.write(localNote.file, marked);
+					this.deps.log("Task deleted in TickTick; keeping the note", localNote.file.path);
+				}
+				store.tombstone(taskId);
 				return;
 			}
 
@@ -584,13 +627,22 @@ export class SyncEngine {
 		const projectName = projectNames.get(task.projectId);
 		await notes.write(file, this.render(task));
 
-		const desired = taskNotePath(task.title, {
-			taskFolder: this.folderFor(task),
-			projectName,
-			folderPerProject: settings.folderPerProject && !settings.listFolders[task.projectId],
-		});
+		// Once notes are found by property rather than by folder, where a note
+		// lives is the user's decision — dragging it back to a computed path
+		// would undo a deliberate move. Only the filename follows the title.
+		const desired = settings.discoverAnywhere
+			? taskNotePath(task.title, {
+					taskFolder: parentFolder(file.path),
+					folderPerProject: false,
+				})
+			: taskNotePath(task.title, {
+					taskFolder: this.folderFor(task),
+					projectName,
+					folderPerProject: settings.folderPerProject && !settings.listFolders[task.projectId],
+				});
 
-		// Covers both a renamed task and a task moved to a different list.
+		// Covers a renamed task, and a task moved between lists when folders are
+		// managed by the plugin.
 		if (file.path !== desired) {
 			await notes.rename(file, desired);
 		}

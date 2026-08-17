@@ -24,9 +24,20 @@ export type ConflictPolicy = "newest" | "preferRemote" | "preferLocal";
 /** What to do when one side was deleted while the other was edited. */
 export type DeleteConflictPolicy = "restore" | "propagateDelete";
 
+/**
+ * What happens to a note when its task is deleted in TickTick.
+ *
+ * "keepNote" leaves it in place and stops syncing it, treating the vault as the
+ * durable record — deleting finished tasks in TickTick is housekeeping, not an
+ * instruction to erase the history of the work.
+ */
+export type RemoteDeletionPolicy = "keepNote" | "deleteNote";
+
 export interface ReconcileOptions {
 	conflictPolicy: ConflictPolicy;
 	deleteConflictPolicy: DeleteConflictPolicy;
+	/** What to do with the note when its task disappears from TickTick. */
+	remoteDeletion: RemoteDeletionPolicy;
 	/** Epoch ms of the note's last modification, when known. */
 	localModifiedAt?: number;
 	/** Epoch ms of the remote task's last modification, when known. */
@@ -47,6 +58,8 @@ export type SyncAction =
 	| { kind: "updateLocal"; snapshot: TaskSnapshot; conflicts: SyncedField[] }
 	| { kind: "updateBoth"; snapshot: TaskSnapshot; conflicts: SyncedField[] }
 	| { kind: "deleteLocal" }
+	/** Remote is gone but the note is kept, and stops syncing, as a record. */
+	| { kind: "orphanLocal" }
 	| { kind: "deleteRemote" }
 	| { kind: "restoreRemote"; snapshot: TaskSnapshot }
 	| { kind: "restoreLocal"; snapshot: TaskSnapshot }
@@ -235,7 +248,12 @@ export function reconcile(input: ReconcileInput, options: ReconcileOptions): Syn
 	}
 
 	if (local && !remote) {
-		// Remote was deleted. Only safe to mirror that if the note is untouched.
+		// Remote was deleted. Pruning finished tasks in TickTick is routine
+		// housekeeping, while the note is often the only record that the work
+		// happened — so keeping it is the default rather than mirroring.
+		if (options.remoteDeletion === "keepNote") return { kind: "orphanLocal" };
+
+		// Only safe to mirror the delete if the note is untouched.
 		if (snapshotsEqual(local, base)) return { kind: "deleteLocal" };
 		return options.deleteConflictPolicy === "propagateDelete"
 			? { kind: "deleteLocal" }

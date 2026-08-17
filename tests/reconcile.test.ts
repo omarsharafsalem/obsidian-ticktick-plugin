@@ -20,6 +20,7 @@ function snap(overrides: Partial<Task> = {}): TaskSnapshot {
 const options: ReconcileOptions = {
 	conflictPolicy: "newest",
 	deleteConflictPolicy: "restore",
+	remoteDeletion: "deleteNote",
 };
 
 describe("reconcile — creation", () => {
@@ -165,6 +166,49 @@ describe("reconcile — deletion", () => {
 		expect(reconcile({ base, remote: snap({ title: "Edited" }) }, propagate).kind).toBe(
 			"deleteRemote",
 		);
+	});
+
+	/**
+	 * Pruning finished tasks in TickTick is routine housekeeping; the note is
+	 * often the only surviving record that the work happened.
+	 */
+	it("keeps the note when a task is deleted in TickTick", () => {
+		const keep: ReconcileOptions = { ...options, remoteDeletion: "keepNote" };
+		const base = snap();
+
+		expect(reconcile({ base, local: snap() }, keep).kind).toBe("orphanLocal");
+	});
+
+	it("keeps the note even when it was edited since", () => {
+		const keep: ReconcileOptions = { ...options, remoteDeletion: "keepNote" };
+		const base = snap();
+
+		expect(reconcile({ base, local: snap({ title: "Edited" }) }, keep).kind).toBe("orphanLocal");
+	});
+
+	it("does not restore the task in TickTick when keeping the note", () => {
+		const keep: ReconcileOptions = { ...options, remoteDeletion: "keepNote" };
+		const base = snap();
+
+		// restoreRemote would recreate the task the user just tidied away.
+		expect(reconcile({ base, local: snap({ title: "Edited" }) }, keep).kind).not.toBe(
+			"restoreRemote",
+		);
+	});
+
+	it("still deletes a note in TickTick's favour when asked to", () => {
+		const mirror: ReconcileOptions = { ...options, remoteDeletion: "deleteNote" };
+		const base = snap();
+
+		expect(reconcile({ base, local: snap() }, mirror).kind).toBe("deleteLocal");
+	});
+
+	it("keeping notes does not change what happens when the note is deleted", () => {
+		const keep: ReconcileOptions = { ...options, remoteDeletion: "keepNote" };
+		const base = snap();
+
+		// Deleting the note is still the user asking for the task to go.
+		expect(reconcile({ base, remote: snap() }, keep).kind).toBe("deleteRemote");
 	});
 
 	it("forgets a task that vanished from both sides", () => {

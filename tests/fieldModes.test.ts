@@ -11,6 +11,7 @@ function snap(overrides: Partial<Task> = {}): TaskSnapshot {
 const options: ReconcileOptions = {
 	conflictPolicy: "newest",
 	deleteConflictPolicy: "restore",
+	remoteDeletion: "deleteNote",
 };
 
 function modes(overrides: Partial<FieldModes>): FieldModes {

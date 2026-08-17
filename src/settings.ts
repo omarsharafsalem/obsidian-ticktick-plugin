@@ -1,5 +1,9 @@
 import type { Priority, SyncedField, TaskStatus } from "./api/types";
-import type { ConflictPolicy, DeleteConflictPolicy } from "./sync/reconcile";
+import type {
+	ConflictPolicy,
+	DeleteConflictPolicy,
+	RemoteDeletionPolicy,
+} from "./sync/reconcile";
 import type { OAuthTokens } from "./auth/oauth";
 
 /**
@@ -32,6 +36,8 @@ export interface PropertyNames {
 	 * include a time, and every all-day task would silently become timed.
 	 */
 	allDay: string;
+	/** Stamped when the task is gone from TickTick but the note is kept. */
+	deleted: string;
 }
 
 export const DEFAULT_PROPERTIES: PropertyNames = {
@@ -49,6 +55,7 @@ export const DEFAULT_PROPERTIES: PropertyNames = {
 	parent: "parent_task",
 	children: "child_tasks",
 	allDay: "all_day",
+	deleted: "ticktick_deleted",
 };
 
 /**
@@ -70,6 +77,7 @@ export const PROPERTY_TYPES: Partial<Record<keyof PropertyNames, string>> = {
 	parent: "text",
 	children: "multitext",
 	allDay: "checkbox",
+	deleted: "datetime",
 };
 
 /**
@@ -228,6 +236,8 @@ export interface TickTickSyncSettings {
 
 	conflictPolicy: ConflictPolicy;
 	deleteConflictPolicy: DeleteConflictPolicy;
+	/** What happens to a note when its task is deleted in TickTick. */
+	remoteDeletion: RemoteDeletionPolicy;
 
 	completedHandling: CompletedHandling;
 	archiveFolder: string;
@@ -264,6 +274,7 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	inlineTags: true,
 	conflictPolicy: "newest",
 	deleteConflictPolicy: "restore",
+	remoteDeletion: "keepNote",
 	completedHandling: "keep",
 	archiveFolder: "Tasks/Archive",
 	debugLogging: false,
