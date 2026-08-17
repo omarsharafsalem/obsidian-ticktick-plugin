@@ -168,6 +168,7 @@ export class SyncEngine {
 		const mapperOptions = {
 			properties: settings.properties,
 			inlineTags: settings.inlineTags,
+			labels: settings.labels,
 			resolveProject: (nameOrId: string) =>
 				idsByName.get(nameOrId.trim().toLowerCase()) ??
 				(projectNames.has(nameOrId) ? nameOrId : undefined),
@@ -480,6 +481,7 @@ export class SyncEngine {
 			{
 				properties: settings.properties,
 				inlineTags: settings.inlineTags,
+				labels: settings.labels,
 			},
 			projectName,
 		);

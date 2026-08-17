@@ -1,6 +1,6 @@
 import { fromFrontmatterDate, looksAllDay, toFrontmatterDate } from "../util/dates";
 import { extractTags, normaliseTag, parseTagList } from "../util/tags";
-import { DEFAULT_PROPERTIES, type PropertyNames } from "../settings";
+import { DEFAULT_PROPERTIES, DEFAULT_VALUE_LABELS, type PropertyNames, type ValueLabels } from "../settings";
 import type { ChecklistItem, Priority, Task, TaskStatus } from "../api/types";
 
 /**
@@ -34,12 +34,32 @@ export interface MapperOptions {
 	 * account's lists; kept as a plain function so this module stays pure.
 	 */
 	resolveProject?: (nameOrId: string) => string | undefined;
+	/** The words this vault uses for statuses, priorities and reminders. */
+	labels?: ValueLabels;
 }
 
 export const DEFAULT_MAPPER_OPTIONS: MapperOptions = {
 	properties: DEFAULT_PROPERTIES,
 	inlineTags: true,
+	labels: DEFAULT_VALUE_LABELS,
 };
+
+/**
+ * Finds the canonical value whose label matches what is written in a note.
+ *
+ * Case- and space-insensitive, because the value is hand-editable and a label
+ * like "In progress" invites both "in progress" and "In Progress".
+ */
+function matchLabel<T extends string>(
+	written: string,
+	labels: Record<T, string>,
+): T | undefined {
+	const wanted = written.trim().toLowerCase();
+	for (const [canonical, label] of Object.entries(labels) as [T, string][]) {
+		if (label.trim().toLowerCase() === wanted) return canonical;
+	}
+	return undefined;
+}
 
 export interface NoteContent {
 	frontmatter: Record<string, unknown>;
@@ -140,13 +160,14 @@ export function taskToNote(
 	projectName?: string,
 ): NoteContent {
 	const p = options.properties;
+	const labels = options.labels ?? DEFAULT_VALUE_LABELS;
 	const frontmatter: Record<string, unknown> = {
 		[p.id]: task.id,
 		// The list's name, not its id: the property is meant to be read and
 		// edited. Falls back to the id only when the name is unknown.
 		[p.project]: projectName ?? task.projectId,
-		[p.status]: task.status,
-		[p.priority]: task.priority,
+		[p.status]: labels.status[task.status] ?? task.status,
+		[p.priority]: labels.priority[task.priority] ?? task.priority,
 	};
 
 	// The etag is a server version token and deliberately never reaches the
@@ -163,7 +184,13 @@ export function taskToNote(
 	if (task.tags.length > 0) frontmatter[p.tags] = task.tags.map(normaliseTag);
 
 	if (task.repeatFlag) frontmatter[p.recurrence] = task.repeatFlag;
-	if (task.reminders.length > 0) frontmatter[p.reminders] = [...task.reminders];
+	// A raw TRIGGER duration means nothing in a Properties panel, so named ones
+	// are written by name. Anything unnamed stays raw rather than being lost.
+	if (task.reminders.length > 0) {
+		frontmatter[p.reminders] = task.reminders.map(
+			(trigger) => labels.reminders[trigger] ?? trigger,
+		);
+	}
 	if (task.parentId) frontmatter[p.parent] = task.parentId;
 	if (task.completedTime) frontmatter[p.completed] = task.completedTime;
 
@@ -180,6 +207,25 @@ function readTags(value: unknown): string[] {
 	// Obsidian also accepts an inline string: `tags: work, urgent` or `tags: #a #b`.
 	if (typeof value === "string") return parseTagList(value);
 	return [];
+}
+
+/**
+ * Turns reminder names back into the iCal TRIGGER durations TickTick expects.
+ *
+ * A value that matches no name is kept verbatim, so a TRIGGER written by hand
+ * still works and an unrecognised one is never silently dropped.
+ */
+function readReminders(value: unknown, labels?: ValueLabels): string[] {
+	const written = readStringArray(value);
+	if (!labels) return written;
+
+	return written.map((entry) => {
+		const wanted = entry.trim().toLowerCase();
+		for (const [trigger, label] of Object.entries(labels.reminders)) {
+			if (label.trim().toLowerCase() === wanted) return trigger;
+		}
+		return entry;
+	});
 }
 
 function readStringArray(value: unknown): string[] {
@@ -206,8 +252,16 @@ function readScalar(value: unknown): unknown {
 	return Array.isArray(value) ? value[0] : value;
 }
 
-function readStatus(raw: unknown, completedAt: unknown): TaskStatus {
+function readStatus(raw: unknown, completedAt: unknown, labels?: ValueLabels): TaskStatus {
 	const value = readScalar(raw);
+
+	// Your own vocabulary wins, so a vault that calls it "Done" round-trips.
+	// The built-in spellings below stay as a fallback for hand-written notes.
+	if (typeof value === "string" && labels) {
+		const matched = matchLabel(value, labels.status);
+		if (matched) return matched;
+	}
+
 	if (typeof value === "string") {
 		const normalised = value.trim().toLowerCase();
 		if (normalised === "completed" || normalised === "done" || normalised === "x") {
@@ -223,8 +277,14 @@ function readStatus(raw: unknown, completedAt: unknown): TaskStatus {
 	return completedAt ? "completed" : "todo";
 }
 
-function readPriority(raw: unknown): Priority {
+function readPriority(raw: unknown, labels?: ValueLabels): Priority {
 	const value = readScalar(raw);
+
+	if (typeof value === "string" && labels) {
+		const matched = matchLabel(value, labels.priority);
+		if (matched) return matched;
+	}
+
 	if (typeof value === "string") {
 		const normalised = value.trim().toLowerCase();
 		if (normalised === "high" || normalised === "medium" || normalised === "low") {
@@ -259,6 +319,7 @@ export function noteToTask(
 	options: MapperOptions = DEFAULT_MAPPER_OPTIONS,
 ): ParsedNote {
 	const p = options.properties;
+	const labels = options.labels ?? DEFAULT_VALUE_LABELS;
 	const fm = note.frontmatter ?? {};
 	const { content, items } = splitBody(note.body);
 
@@ -289,13 +350,13 @@ export function noteToTask(
 		projectId,
 		title: readString(fm[p.title]) ?? filenameTitle,
 		content,
-		status: readStatus(fm[p.status], fm[p.completed]),
-		priority: readPriority(fm[p.priority]),
+		status: readStatus(fm[p.status], fm[p.completed], labels),
+		priority: readPriority(fm[p.priority], labels),
 		tags,
 		dueDate,
 		startDate,
 		isAllDay,
-		reminders: readStringArray(fm[p.reminders]),
+		reminders: readReminders(fm[p.reminders], labels),
 		repeatFlag: readString(fm[p.recurrence]),
 		parentId: readString(fm[p.parent]),
 		items,

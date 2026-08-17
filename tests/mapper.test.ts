@@ -269,6 +269,88 @@ describe("list-typed properties", () => {
 	});
 });
 
+/**
+ * Dropping the plugin into a vault that already tracks tasks means speaking that
+ * vault's vocabulary, not just renaming properties.
+ */
+describe("value labels", () => {
+	const vaultWords: MapperOptions = {
+		...options,
+		labels: {
+			status: { todo: "Not started", completed: "Done", abandoned: "Won't do" },
+			priority: { none: "—", low: "P3", medium: "P2", high: "P1" },
+			reminders: { "TRIGGER:-PT30M": "30 minutes before", "TRIGGER:PT0S": "On time" },
+		},
+	};
+
+	it("writes the vault's own words into the note", () => {
+		const note = taskToNote(
+			task({ status: "completed", priority: "high", reminders: ["TRIGGER:-PT30M"] }),
+			vaultWords,
+		);
+
+		expect(note.frontmatter.status).toBe("Done");
+		expect(note.frontmatter.priority).toBe("P1");
+		expect(note.frontmatter.reminders).toEqual(["30 minutes before"]);
+	});
+
+	it("reads them back into the codes TickTick expects", () => {
+		const parsed = noteToTask(
+			{
+				frontmatter: { status: "Done", priority: "P1", reminders: ["30 minutes before"] },
+				body: "",
+			},
+			"Buy milk",
+			vaultWords,
+		);
+
+		expect(parsed.status).toBe("completed");
+		expect(parsed.priority).toBe("high");
+		expect(parsed.reminders).toEqual(["TRIGGER:-PT30M"]);
+	});
+
+	it("round-trips every status and priority", () => {
+		for (const status of ["todo", "completed", "abandoned"] as const) {
+			for (const priority of ["none", "low", "medium", "high"] as const) {
+				const note = taskToNote(task({ status, priority }), vaultWords);
+				const parsed = noteToTask(note, "Buy milk", vaultWords);
+
+				expect({ status: parsed.status, priority: parsed.priority }).toEqual({ status, priority });
+			}
+		}
+	});
+
+	it("matches a label regardless of case or padding", () => {
+		const parsed = noteToTask(
+			{ frontmatter: { status: "  done  ", priority: "p1" }, body: "" },
+			"Buy milk",
+			vaultWords,
+		);
+
+		expect(parsed.status).toBe("completed");
+		expect(parsed.priority).toBe("high");
+	});
+
+	it("keeps an unnamed reminder as its raw TRIGGER rather than dropping it", () => {
+		const note = taskToNote(task({ reminders: ["TRIGGER:-P3D"] }), vaultWords);
+		expect(note.frontmatter.reminders).toEqual(["TRIGGER:-P3D"]);
+
+		const parsed = noteToTask(note, "Buy milk", vaultWords);
+		expect(parsed.reminders).toEqual(["TRIGGER:-P3D"]);
+	});
+
+	it("still understands the built-in spellings in a hand-written note", () => {
+		const parsed = noteToTask(
+			{ frontmatter: { status: "completed", priority: "high" }, body: "" },
+			"Buy milk",
+			vaultWords,
+		);
+
+		expect(parsed.status).toBe("completed");
+		expect(parsed.priority).toBe("high");
+	});
+});
+
 describe("restoreItemMetadata", () => {
 	const remote = [
 		{ id: "i1", title: "oat", completed: false },

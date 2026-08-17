@@ -1,6 +1,12 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type TickTickSyncPlugin from "../main";
-import { SYNCED_FIELDS, type Project, type SyncedField } from "../api/types";
+import {
+	SYNCED_FIELDS,
+	type Priority,
+	type Project,
+	type SyncedField,
+	type TaskStatus,
+} from "../api/types";
 import { awaitLoopbackCode, exchangeAuthCode, extractAuthCode, randomState } from "../auth/oauth";
 import { DEFAULT_PROPERTIES, type FieldSyncMode, type PropertyNames } from "../settings";
 import { emptyState, SyncStore } from "../sync/state";
@@ -54,6 +60,7 @@ export class TickTickSettingTab extends PluginSettingTab {
 		this.renderConnection(containerEl);
 		this.renderSync(containerEl);
 		this.renderProperties(containerEl);
+		this.renderValues(containerEl);
 		this.renderFieldDirections(containerEl);
 		this.renderConflicts(containerEl);
 		this.renderAdvanced(containerEl);
@@ -409,6 +416,84 @@ export class TickTickSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 						// Keep the summary above honest without redrawing the whole tab.
 						setting.setDesc(summarise());
+					}),
+				);
+		}
+	}
+
+	// --- Values ---------------------------------------------------------------
+
+	/**
+	 * Lets an existing vault keep its own vocabulary.
+	 *
+	 * Renaming the *property* is only half the job: a vault that already tracks
+	 * tasks will call things "Done" or "P1", and TickTick stores those as codes.
+	 * These are the translations, and they apply in both directions.
+	 */
+	private renderValues(root: HTMLElement): void {
+		const { settings } = this.plugin;
+		root.createEl("h2", { text: "Values" });
+		root.createEl("p", {
+			text:
+				"What each TickTick value is called in your notes. Set these to the words your vault " +
+				"already uses — they are written into notes and read back out, so a two-way sync still " +
+				"sends TickTick the code it expects.",
+			cls: "setting-item-description",
+		});
+
+		const statusHelp: Record<TaskStatus, string> = {
+			todo: "An open task.",
+			completed: "Ticked off. TickTick stores this as status 2.",
+			abandoned: "Won't do. TickTick stores this as status -1.",
+		};
+
+		for (const key of ["todo", "completed", "abandoned"] as TaskStatus[]) {
+			new Setting(root)
+				.setName(`Status: ${key}`)
+				.setDesc(statusHelp[key])
+				.addText((text) =>
+					text.setValue(settings.labels.status[key]).onChange(async (value) => {
+						settings.labels.status[key] = value.trim() || key;
+						await this.plugin.saveSettings();
+					}),
+				);
+		}
+
+		const priorityHelp: Record<Priority, string> = {
+			none: "No priority. TickTick sends 0.",
+			low: "TickTick sends 1.",
+			medium: "TickTick sends 3.",
+			high: "TickTick sends 5.",
+		};
+
+		for (const key of ["none", "low", "medium", "high"] as Priority[]) {
+			new Setting(root)
+				.setName(`Priority: ${key}`)
+				.setDesc(priorityHelp[key])
+				.addText((text) =>
+					text.setValue(settings.labels.priority[key]).onChange(async (value) => {
+						settings.labels.priority[key] = value.trim() || key;
+						await this.plugin.saveSettings();
+					}),
+				);
+		}
+
+		root.createEl("p", {
+			text:
+				"Reminders are stored by TickTick as iCal durations — TRIGGER:-PT30M means thirty " +
+				"minutes before the task is due. The names below are what appears in your notes; a " +
+				"reminder TickTick sends that is not listed here stays as its raw TRIGGER rather than " +
+				"being dropped.",
+			cls: "setting-item-description",
+		});
+
+		for (const trigger of Object.keys(settings.labels.reminders)) {
+			new Setting(root)
+				.setName(trigger)
+				.addText((text) =>
+					text.setValue(settings.labels.reminders[trigger]).onChange(async (value) => {
+						settings.labels.reminders[trigger] = value.trim() || trigger;
+						await this.plugin.saveSettings();
 					}),
 				);
 		}

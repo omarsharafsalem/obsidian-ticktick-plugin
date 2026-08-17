@@ -1,4 +1,4 @@
-import type { SyncedField } from "./api/types";
+import type { Priority, SyncedField, TaskStatus } from "./api/types";
 import type { ConflictPolicy, DeleteConflictPolicy } from "./sync/reconcile";
 import type { OAuthTokens } from "./auth/oauth";
 
@@ -57,6 +57,59 @@ export const PROPERTY_TYPES: Partial<Record<keyof PropertyNames, string>> = {
 	status: "multitext",
 	priority: "multitext",
 	project: "multitext",
+};
+
+/**
+ * The words your vault uses for each value TickTick stores as a code.
+ *
+ * Renaming a *property* is not enough to drop this plugin into an existing
+ * vault: TickTick's priority is an integer and its status is 0/2/-1, and a vault
+ * that already tracks tasks will have its own vocabulary — "Done", "P1",
+ * "In progress". These maps are the translation, applied in both directions, so
+ * notes read in your language and still push the right codes back.
+ */
+export interface ValueLabels {
+	status: Record<TaskStatus, string>;
+	priority: Record<Priority, string>;
+	/** iCal TRIGGER string to the name you would rather read. */
+	reminders: Record<string, string>;
+}
+
+export const DEFAULT_STATUS_LABELS: Record<TaskStatus, string> = {
+	todo: "todo",
+	completed: "completed",
+	abandoned: "abandoned",
+};
+
+export const DEFAULT_PRIORITY_LABELS: Record<Priority, string> = {
+	none: "none",
+	low: "low",
+	medium: "medium",
+	high: "high",
+};
+
+/**
+ * TickTick stores reminders as iCal TRIGGER durations — `TRIGGER:-PT30M` is
+ * "thirty minutes before". Unreadable in a Properties panel, and impossible to
+ * write by hand correctly, so the common ones get names. Anything not listed
+ * passes through as its raw TRIGGER rather than being dropped.
+ */
+export const DEFAULT_REMINDER_LABELS: Record<string, string> = {
+	"TRIGGER:PT0S": "On time",
+	"TRIGGER:-PT5M": "5 minutes before",
+	"TRIGGER:-PT15M": "15 minutes before",
+	"TRIGGER:-PT30M": "30 minutes before",
+	"TRIGGER:-PT1H": "1 hour before",
+	"TRIGGER:-PT2H": "2 hours before",
+	"TRIGGER:-P1D": "1 day before",
+	"TRIGGER:-P2D": "2 days before",
+	"TRIGGER:-P1W": "1 week before",
+};
+
+export const DEFAULT_VALUE_LABELS: ValueLabels = {
+	status: { ...DEFAULT_STATUS_LABELS },
+	priority: { ...DEFAULT_PRIORITY_LABELS },
+	reminders: { ...DEFAULT_REMINDER_LABELS },
 };
 
 /** Per-field direction control, mirroring how Notion's TickTick sync works. */
@@ -126,6 +179,8 @@ export interface TickTickSyncSettings {
 	syncCompletedTasks: boolean;
 
 	properties: PropertyNames;
+	/** The vocabulary those properties use. See {@link ValueLabels}. */
+	labels: ValueLabels;
 	fieldModes: FieldModes;
 	registerPropertyTypes: boolean;
 
@@ -157,6 +212,11 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	listFolders: {},
 	syncCompletedTasks: false,
 	properties: { ...DEFAULT_PROPERTIES },
+	labels: {
+		status: { ...DEFAULT_STATUS_LABELS },
+		priority: { ...DEFAULT_PRIORITY_LABELS },
+		reminders: { ...DEFAULT_REMINDER_LABELS },
+	},
 	fieldModes: { ...DEFAULT_FIELD_MODES },
 	registerPropertyTypes: true,
 	inlineTags: true,
@@ -185,5 +245,12 @@ export function mergeSettings(stored: unknown): TickTickSyncSettings {
 		properties: { ...DEFAULT_PROPERTIES, ...(raw.properties ?? {}) },
 		fieldModes: { ...DEFAULT_FIELD_MODES, ...(raw.fieldModes ?? {}) },
 		listFolders: { ...(raw.listFolders ?? {}) },
+		labels: {
+			status: { ...DEFAULT_STATUS_LABELS, ...(raw.labels?.status ?? {}) },
+			priority: { ...DEFAULT_PRIORITY_LABELS, ...(raw.labels?.priority ?? {}) },
+			// Merged rather than replaced, so adding a custom TRIGGER keeps the
+			// built-in names working.
+			reminders: { ...DEFAULT_REMINDER_LABELS, ...(raw.labels?.reminders ?? {}) },
+		},
 	};
 }
