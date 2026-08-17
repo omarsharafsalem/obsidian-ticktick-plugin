@@ -34,6 +34,13 @@ export interface TaskLink {
 /** Relationships the mapper cannot work out from a task on its own. */
 export interface NoteContext {
 	projectName?: string;
+	/**
+	 * The note representing this task's list, when one is configured.
+	 *
+	 * Written instead of the plain list name so the task appears in that note's
+	 * backlinks, which is how a project page gathers its own work.
+	 */
+	projectLink?: TaskLink;
 	parent?: TaskLink;
 	/** Derived from whichever tasks point at this one; never read back. */
 	children?: TaskLink[];
@@ -217,9 +224,11 @@ export function taskToNote(
 	const labels = options.labels ?? DEFAULT_VALUE_LABELS;
 	const frontmatter: Record<string, unknown> = {
 		[p.id]: task.id,
-		// The list's name, not its id: the property is meant to be read and
-		// edited. Falls back to the id only when the name is unknown.
-		[p.project]: projectName ?? task.projectId,
+		// A link to the list's own note when there is one, otherwise its name.
+		// Either way not the id: the property is meant to be read and edited.
+		[p.project]: context.projectLink
+			? formatWikilink(context.projectLink)
+			: (projectName ?? task.projectId),
 		[p.status]: labels.status[task.status] ?? task.status,
 		[p.priority]: labels.priority[task.priority] ?? task.priority,
 	};
@@ -441,11 +450,17 @@ export function noteToTask(
 	const bodyTags = options.inlineTags ? extractTags(note.body) : [];
 	const tags = dedupeTags([...propertyTags, ...bodyTags]);
 
-	// The list property holds a name, so it has to be turned back into an id.
-	// An unrecognised value is passed through untouched: it may already be an id,
-	// and guessing would silently move the task to the wrong list.
+	// The list property holds a name, or a link to the list's note. Either is
+	// resolved back to an id. A plain value that resolves to nothing is passed
+	// through — it may already be an id — but an unresolved *link* is not, since
+	// a note title is never a list id and guessing would move the task.
 	const projectRef = readString(fm[p.project]);
-	const projectId = projectRef ? (options.resolveProject?.(projectRef) ?? projectRef) : undefined;
+	const projectTarget = projectRef ? parseWikilink(projectRef) : undefined;
+	const projectId = projectRef
+		? projectTarget !== undefined
+			? options.resolveProject?.(projectTarget)
+			: (options.resolveProject?.(projectRef) ?? projectRef)
+		: undefined;
 
 	return {
 		id: readString(fm[p.id]),

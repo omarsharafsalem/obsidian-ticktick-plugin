@@ -195,10 +195,20 @@ export class SyncEngine {
 			markerActive && settings.discoverAnywhere ? "" : settings.taskFolder,
 		);
 
-		// The list property holds a name, so reading a note means turning it back
-		// into an id. Matched case-insensitively, since the value is hand-editable.
+		// The list property holds a name, or a link to the list's own note, so
+		// reading a note means turning either back into an id. Matched
+		// case-insensitively, since the value is hand-editable.
 		const idsByName = new Map<string, string>();
 		for (const [id, name] of projectNames) idsByName.set(name.trim().toLowerCase(), id);
+
+		// A configured project note is matched by its full path and by its
+		// basename, because [[Health]] and [[Areas/Health]] mean the same note.
+		for (const [projectId, page] of Object.entries(settings.listPages)) {
+			const link = projectPageLink(page);
+			if (!link) continue;
+			idsByName.set(link.title.trim().toLowerCase(), projectId);
+			if (link.path) idsByName.set(link.path.trim().toLowerCase(), projectId);
+		}
 
 		const mapperOptions = {
 			properties: settings.properties,
@@ -332,6 +342,7 @@ export class SyncEngine {
 				const parent = task.parentId ? byId.get(task.parentId) : undefined;
 				return {
 					projectName: projectNames.get(task.projectId),
+					projectLink: projectPageLink(this.deps.settings.listPages[task.projectId]),
 					parent: parent ? linkFor(parent) : undefined,
 					children: children.get(task.id),
 				};
@@ -708,6 +719,22 @@ export class SyncEngine {
 			lastSyncedAt: Date.now(),
 		};
 	}
+}
+
+/**
+ * The link to write for a list whose note has been configured.
+ *
+ * A value containing a slash is treated as a vault path and linked with the
+ * basename as the display text, so the property still reads as the project's
+ * name rather than its full location.
+ */
+function projectPageLink(page: string | undefined): TaskLink | undefined {
+	const trimmed = page?.trim().replace(/\.md$/i, "");
+	if (!trimmed) return undefined;
+
+	const slash = trimmed.lastIndexOf("/");
+	if (slash === -1) return { title: trimmed };
+	return { title: trimmed.slice(slash + 1), path: trimmed };
 }
 
 /**

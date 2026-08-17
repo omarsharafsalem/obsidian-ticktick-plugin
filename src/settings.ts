@@ -209,6 +209,15 @@ export interface TickTickSyncSettings {
 	listFolders: Record<string, string>;
 
 	/**
+	 * The note that represents each list, keyed by project id.
+	 *
+	 * When set, the list property is written as a wikilink to that note instead
+	 * of a plain name, so every task shows up in the project note's backlinks and
+	 * the link is navigable. Reading resolves the link back to the list.
+	 */
+	listPages: Record<string, string>;
+
+	/**
 	 * Pull tasks that are already completed in TickTick.
 	 *
 	 * Off by default: it creates a note for everything finished in the last 90
@@ -261,6 +270,7 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	syncOnStartup: true,
 	projectFilter: [],
 	listFolders: {},
+	listPages: {},
 	dateProperties: "datetime",
 	syncCompletedTasks: false,
 	properties: { ...DEFAULT_PROPERTIES },
@@ -298,6 +308,7 @@ export function mergeSettings(stored: unknown): TickTickSyncSettings {
 		properties: { ...DEFAULT_PROPERTIES, ...(raw.properties ?? {}) },
 		fieldModes: { ...DEFAULT_FIELD_MODES, ...(raw.fieldModes ?? {}) },
 		listFolders: { ...(raw.listFolders ?? {}) },
+		listPages: { ...(raw.listPages ?? {}) },
 		taskMarker: { ...DEFAULT_SETTINGS.taskMarker, ...(raw.taskMarker ?? {}) },
 		labels: {
 			status: { ...DEFAULT_STATUS_LABELS, ...(raw.labels?.status ?? {}) },

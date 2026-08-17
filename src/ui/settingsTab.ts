@@ -46,9 +46,25 @@ const PROPERTY_LABELS: Record<keyof PropertyNames, string> = {
 	deleted: "Deleted in TickTick at",
 };
 
+const TABS = [
+	{ id: "connection", label: "Connection" },
+	{ id: "sync", label: "Sync" },
+	{ id: "lists", label: "Lists" },
+	{ id: "properties", label: "Properties" },
+	{ id: "values", label: "Values" },
+	{ id: "directions", label: "What syncs" },
+	{ id: "conflicts", label: "Conflicts" },
+	{ id: "advanced", label: "Advanced" },
+] as const;
+
+type TabId = (typeof TABS)[number]["id"];
+
 export class TickTickSettingTab extends PluginSettingTab {
 	/** Lists fetched from TickTick, cached so the tab can redraw without refetching. */
 	private projects: Project[] | null = null;
+
+	/** Survives redraws, so toggling a setting does not throw you back to the top. */
+	private activeTab: TabId = "connection";
 
 	constructor(
 		app: App,
@@ -61,13 +77,56 @@ export class TickTickSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		this.renderConnection(containerEl);
-		this.renderSync(containerEl);
-		this.renderProperties(containerEl);
-		this.renderValues(containerEl);
-		this.renderFieldDirections(containerEl);
-		this.renderConflicts(containerEl);
-		this.renderAdvanced(containerEl);
+		this.renderTabs(containerEl);
+		const body = containerEl.createDiv();
+
+		switch (this.activeTab) {
+			case "sync":
+				this.renderSync(body);
+				break;
+			case "lists":
+				this.renderLists(body);
+				break;
+			case "properties":
+				this.renderProperties(body);
+				break;
+			case "values":
+				this.renderValues(body);
+				break;
+			case "directions":
+				this.renderFieldDirections(body);
+				break;
+			case "conflicts":
+				this.renderConflicts(body);
+				break;
+			case "advanced":
+				this.renderAdvanced(body);
+				break;
+			default:
+				this.renderConnection(body);
+		}
+	}
+
+	/**
+	 * A row of section buttons. Obsidian has no settings-tab primitive, so this
+	 * is a plain button row styled inline — cheaper than shipping a stylesheet
+	 * for one control, and it inherits the theme's button colours either way.
+	 */
+	private renderTabs(root: HTMLElement): void {
+		const nav = root.createDiv();
+		nav.style.display = "flex";
+		nav.style.flexWrap = "wrap";
+		nav.style.gap = "0.4em";
+		nav.style.marginBottom = "1.5em";
+
+		for (const tab of TABS) {
+			const button = nav.createEl("button", { text: tab.label });
+			if (tab.id === this.activeTab) button.addClass("mod-cta");
+			button.onclick = () => {
+				this.activeTab = tab.id;
+				this.display();
+			};
+		}
 	}
 
 	// --- Connection ---------------------------------------------------------
@@ -311,8 +370,6 @@ export class TickTickSettingTab extends PluginSettingTab {
 				}),
 			);
 
-		this.renderListFilter(root);
-
 		new Setting(root)
 			.setName("Sync every")
 			.setDesc(
@@ -378,7 +435,7 @@ export class TickTickSettingTab extends PluginSettingTab {
 		);
 	}
 
-	// --- List filter --------------------------------------------------------
+	// --- Lists ----------------------------------------------------------------
 
 	/**
 	 * Scopes sync to a chosen set of lists. An empty selection means every list,
@@ -388,8 +445,9 @@ export class TickTickSettingTab extends PluginSettingTab {
 	 * Until then the raw ids are shown, so a selection made earlier is still
 	 * visible and clearable offline.
 	 */
-	private renderListFilter(root: HTMLElement): void {
+	private renderLists(root: HTMLElement): void {
 		const { settings } = this.plugin;
+		root.createEl("h2", { text: "Lists" });
 
 		const summarise = (): string =>
 			settings.projectFilter.length === 0
@@ -444,9 +502,10 @@ export class TickTickSettingTab extends PluginSettingTab {
 			new Setting(root)
 				.setName(project.name)
 				.setDesc(
-					project.closed
-						? "Archived in TickTick. Leave the folder blank to use the task folder."
-						: "Leave the folder blank to use the task folder.",
+					(project.closed ? "Archived in TickTick. " : "") +
+						"Folder for this list's notes, and the note that represents the project. " +
+						"Set a project note and the list property becomes a link to it, so every task " +
+						"appears in that note's backlinks. Both are optional.",
 				)
 				.addText((text) => {
 					text.setPlaceholder("Folder for this list");
@@ -454,6 +513,15 @@ export class TickTickSettingTab extends PluginSettingTab {
 						const folder = value.trim();
 						if (folder) settings.listFolders[project.id] = folder;
 						else delete settings.listFolders[project.id];
+						await this.plugin.saveSettings();
+					});
+				})
+				.addText((text) => {
+					text.setPlaceholder("Project note, e.g. Health dashboard");
+					text.setValue(settings.listPages[project.id] ?? "").onChange(async (value) => {
+						const page = value.trim();
+						if (page) settings.listPages[project.id] = page;
+						else delete settings.listPages[project.id];
 						await this.plugin.saveSettings();
 					});
 				})

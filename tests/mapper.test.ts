@@ -210,6 +210,47 @@ describe("the list property", () => {
 		expect(note.frontmatter.list).toBe("6226ff98");
 	});
 
+	it("writes a link to the project note when one is configured", () => {
+		const note = taskToNote(task({ projectId: "6226ff98" }), options, {
+			projectName: "Health & Fitness",
+			projectLink: { title: "Health dashboard" },
+		});
+
+		expect(note.frontmatter.list).toBe("[[Health dashboard]]");
+	});
+
+	it("qualifies the project link with a path when given one", () => {
+		const note = taskToNote(task({ projectId: "6226ff98" }), options, {
+			projectLink: { title: "Health dashboard", path: "Areas/Health/Health dashboard" },
+		});
+
+		expect(note.frontmatter.list).toBe("[[Areas/Health/Health dashboard|Health dashboard]]");
+	});
+
+	it("resolves a project link back to the list", () => {
+		const parsed = noteToTask(
+			{ frontmatter: { list: "[[Health dashboard]]" }, body: "" },
+			"Buy milk",
+			{
+				...options,
+				resolveProject: (target) => (target === "Health dashboard" ? "6226ff98" : undefined),
+			},
+		);
+
+		expect(parsed.projectId).toBe("6226ff98");
+	});
+
+	// A note title is never a list id, so passing it through would move the task.
+	it("does not treat an unresolved link as a list id", () => {
+		const parsed = noteToTask(
+			{ frontmatter: { list: "[[Some other note]]" }, body: "" },
+			"Buy milk",
+			{ ...options, resolveProject: () => undefined },
+		);
+
+		expect(parsed.projectId).toBeUndefined();
+	});
+
 	it("turns the name back into an id when reading", () => {
 		const parsed = noteToTask({ frontmatter: { list: "Errands" }, body: "" }, "Buy milk", {
 			...options,
