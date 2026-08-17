@@ -810,7 +810,17 @@ export class SyncEngine {
 	): Promise<void> {
 		const { store } = this.deps;
 
-		const orphans = local.filter((note) => !note.taskId && !store.getByPath(note.file.path));
+		const orphans = local.filter((note) => {
+			if (note.taskId) return false;
+
+			// Being tracked by path only counts while the task it points at still
+			// exists. An entry left behind by a task that has since been deleted is
+			// stale, and must not stop the note being re-linked to a live one —
+			// otherwise a single dead entry strands the note permanently.
+			const tracked = store.getByPath(note.file.path);
+			return !tracked || !remote.has(tracked.taskId);
+		});
+
 		if (orphans.length === 0) return;
 
 		// Claimed by a note found this pass — not merely tracked. A task whose
@@ -834,6 +844,12 @@ export class SyncEngine {
 				report.planned.push(`Re-link ${note.file.path} to its existing task "${twin.title}"`);
 				continue;
 			}
+
+			// Drop any stale entry for this path first, so the note is not left
+			// tracked twice — once to the task it just adopted and once to a
+			// task that no longer exists.
+			const stale = store.getByPath(note.file.path);
+			if (stale && stale.taskId !== twin.id) store.forget(stale.taskId);
 
 			await this.stampNote(note.file, twin, note.snapshot, note);
 			store.set(this.entryFor(twin, note.file.path, toSnapshot(twin), Date.now()));
