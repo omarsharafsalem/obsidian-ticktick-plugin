@@ -5,6 +5,7 @@ import {
 	buildBody,
 	noteToTask,
 	parsedNoteToTask,
+	reattachItemIds,
 	sanitiseFilename,
 	splitBody,
 	taskToNote,
@@ -169,8 +170,8 @@ describe("round trip", () => {
 			repeatFlag: "RRULE:FREQ=WEEKLY",
 			reminders: ["TRIGGER:-PT60M"],
 			items: [
-				{ title: "oat", completed: true },
-				{ title: "soy", completed: false },
+				{ id: "i1", title: "oat", completed: true },
+				{ id: "i2", title: "soy", completed: false },
 			],
 		});
 
@@ -185,7 +186,98 @@ describe("round trip", () => {
 		expect(restored.dueDate).toBe(original.dueDate);
 		expect(restored.repeatFlag).toBe(original.repeatFlag);
 		expect(restored.reminders).toEqual(original.reminders);
-		expect(restored.items).toEqual(original.items);
+
+		// A note stores subtasks as plain checkbox lines, so ids cannot survive
+		// the round trip on their own. Titles and completion must.
+		expect(restored.items).toEqual([
+			{ title: "oat", completed: true },
+			{ title: "soy", completed: false },
+		]);
+		// Re-attaching against the remote task is what restores full identity,
+		// so an update edits the existing items instead of recreating them.
+		expect(reattachItemIds(restored.items, original.items)).toEqual(original.items);
+	});
+});
+
+describe("reattachItemIds", () => {
+	const remote = [
+		{ id: "i1", title: "oat", completed: false },
+		{ id: "i2", title: "soy", completed: false },
+		{ id: "i3", title: "almond", completed: false },
+	];
+
+	it("restores ids for items that kept their titles", () => {
+		const parsed = [
+			{ title: "oat", completed: true },
+			{ title: "soy", completed: false },
+			{ title: "almond", completed: false },
+		];
+
+		expect(reattachItemIds(parsed, remote).map((item) => item.id)).toEqual(["i1", "i2", "i3"]);
+	});
+
+	it("follows the title when items are reordered", () => {
+		const parsed = [
+			{ title: "almond", completed: false },
+			{ title: "oat", completed: false },
+			{ title: "soy", completed: false },
+		];
+
+		expect(reattachItemIds(parsed, remote).map((item) => item.id)).toEqual(["i3", "i1", "i2"]);
+	});
+
+	it("falls back to position so a renamed item keeps its id", () => {
+		const parsed = [
+			{ title: "oat", completed: false },
+			{ title: "soya milk", completed: false },
+			{ title: "almond", completed: false },
+		];
+
+		expect(reattachItemIds(parsed, remote).map((item) => item.id)).toEqual(["i1", "i2", "i3"]);
+	});
+
+	it("leaves genuinely new items without an id", () => {
+		const parsed = [
+			{ title: "oat", completed: false },
+			{ title: "soy", completed: false },
+			{ title: "almond", completed: false },
+			{ title: "hazelnut", completed: false },
+		];
+
+		expect(reattachItemIds(parsed, remote).map((item) => item.id)).toEqual([
+			"i1",
+			"i2",
+			"i3",
+			undefined,
+		]);
+	});
+
+	it("gives duplicate titles distinct ids rather than reusing one", () => {
+		const duplicated = [
+			{ id: "a", title: "call", completed: false },
+			{ id: "b", title: "call", completed: false },
+		];
+		const parsed = [
+			{ title: "call", completed: true },
+			{ title: "call", completed: false },
+		];
+
+		expect(reattachItemIds(parsed, duplicated).map((item) => item.id)).toEqual(["a", "b"]);
+	});
+
+	it("does not invent ids when the task had no items before", () => {
+		const parsed = [{ title: "first subtask", completed: false }];
+		expect(reattachItemIds(parsed, [])).toEqual(parsed);
+	});
+
+	it("matches titles ignoring surrounding whitespace and case", () => {
+		const parsed = [{ title: "  OAT  ", completed: false }];
+		expect(reattachItemIds(parsed, remote)[0].id).toBe("i1");
+	});
+
+	it("keeps an id the item already carries", () => {
+		const parsed = [{ id: "explicit", title: "oat", completed: false }];
+		expect(reattachItemIds(parsed, remote)[0].id).toBe("explicit");
 	});
 });
 

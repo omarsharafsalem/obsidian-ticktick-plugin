@@ -1,6 +1,6 @@
 {
 	"id": "ticktick-sync",
-	"name": "TickTick Sync",
+	"name": "TickTick Task Notes",
 	"version": "0.1.0",
 	"minAppVersion": "1.5.0",
 	"description": "Two-way sync between TickTick and your vault, with one note per task.",

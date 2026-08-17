@@ -1,4 +1,4 @@
-# TickTick Sync for Obsidian
+# TickTick Task Notes for Obsidian
 
 Two-way sync between TickTick and an Obsidian vault, where **every task is its own note** and
 **every TickTick field is a real Obsidian property**.

@@ -284,6 +284,65 @@ function dedupeTags(tags: string[]): string[] {
 	return result;
 }
 
+function itemKey(title: string): string {
+	return title.trim().toLowerCase();
+}
+
+/**
+ * Re-attaches remote checklist item ids to items parsed out of a note.
+ *
+ * A note renders subtasks as plain `- [ ] title` lines, so a checklist read
+ * back out of one carries no ids. Pushing that shape makes TickTick treat every
+ * item as new, which deletes and recreates the subtasks and loses their
+ * per-item completion times. Matching on title first and falling back to
+ * position keeps identity across both reordering and renaming.
+ *
+ * Item ids are deliberately absent from the note itself: they are server
+ * bookkeeping, and `fieldsEqual` in reconcile.ts already compares items on
+ * title and completion alone, so carrying them here changes no merge decision.
+ */
+export function reattachItemIds(
+	items: ChecklistItem[],
+	reference: ChecklistItem[],
+): ChecklistItem[] {
+	const taken: boolean[] = new Array(reference.length).fill(false);
+	const resolved: (string | undefined)[] = new Array(items.length).fill(undefined);
+
+	const byTitle = new Map<string, number[]>();
+	reference.forEach((item, index) => {
+		if (!item.id) return;
+		const bucket = byTitle.get(itemKey(item.title));
+		if (bucket) bucket.push(index);
+		else byTitle.set(itemKey(item.title), [index]);
+	});
+
+	// Pass 1: identical titles, in order, so duplicate titles keep their own ids.
+	items.forEach((item, i) => {
+		if (item.id) {
+			resolved[i] = item.id;
+			return;
+		}
+		const match = byTitle.get(itemKey(item.title))?.find((index) => !taken[index]);
+		if (match === undefined) return;
+		taken[match] = true;
+		resolved[i] = reference[match].id;
+	});
+
+	// Pass 2: positional fallback, which carries a renamed item's id through.
+	items.forEach((_item, i) => {
+		if (resolved[i] !== undefined) return;
+		const candidate = reference[i];
+		if (!candidate?.id || taken[i]) return;
+		taken[i] = true;
+		resolved[i] = candidate.id;
+	});
+
+	return items.map((item, i) => {
+		const id = resolved[i];
+		return id === undefined ? item : { ...item, id };
+	});
+}
+
 /** Lifts a parsed note into a full task, using `base` for fields notes omit. */
 export function parsedNoteToTask(parsed: ParsedNote, base: Task): Task {
 	return {

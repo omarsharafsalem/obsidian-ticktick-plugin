@@ -4,7 +4,7 @@ import { blankTask, type NewTask, type Project, type Task } from "../api/types";
 import type { TickTickSyncSettings } from "../settings";
 import { NoteRepository, taskNotePath } from "../vault/notes";
 import { applyFieldModes } from "./fieldModes";
-import { noteToTask, parsedNoteToTask, taskToNote } from "./mapper";
+import { noteToTask, parsedNoteToTask, reattachItemIds, taskToNote } from "./mapper";
 import { reconcile, toSnapshot, type SyncAction, type TaskSnapshot } from "./reconcile";
 import type { SyncEntry, SyncStore } from "./state";
 
@@ -334,7 +334,14 @@ export class SyncEngine {
 				if (!localNote || !remoteRecord) return;
 				report.conflicts += action.conflicts.length;
 
-				const merged: Task = { ...remoteRecord.task, ...action.snapshot, id: taskId };
+				// Subtasks parsed from a note carry no ids, and pushing them without
+				// would make TickTick recreate every item rather than update it.
+				const merged: Task = {
+					...remoteRecord.task,
+					...action.snapshot,
+					id: taskId,
+					items: reattachItemIds(action.snapshot.items, remoteRecord.task.items),
+				};
 
 				if (action.kind !== "updateLocal") {
 					await client.updateTask(merged);

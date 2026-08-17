@@ -1,6 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type TickTickSyncPlugin from "../main";
-import { SYNCED_FIELDS, type SyncedField } from "../api/types";
+import { SYNCED_FIELDS, type Project, type SyncedField } from "../api/types";
 import { v2SignOn } from "../api/v2";
 import { awaitLoopbackCode, exchangeAuthCode, extractAuthCode, randomState } from "../auth/oauth";
 import { DEFAULT_PROPERTIES, type FieldSyncMode, type PropertyNames } from "../settings";
@@ -39,6 +39,9 @@ const PROPERTY_LABELS: Record<keyof PropertyNames, string> = {
 };
 
 export class TickTickSettingTab extends PluginSettingTab {
+	/** Lists fetched from TickTick, cached so the tab can redraw without refetching. */
+	private projects: Project[] | null = null;
+
 	constructor(
 		app: App,
 		private readonly plugin: TickTickSyncPlugin,
@@ -270,6 +273,8 @@ export class TickTickSettingTab extends PluginSettingTab {
 				}),
 			);
 
+		this.renderListFilter(root);
+
 		new Setting(root)
 			.setName("Sync every")
 			.setDesc(
@@ -319,6 +324,86 @@ export class TickTickSettingTab extends PluginSettingTab {
 				.setCta()
 				.onClick(() => void this.plugin.runSync()),
 		);
+	}
+
+	// --- List filter --------------------------------------------------------
+
+	/**
+	 * Scopes sync to a chosen set of lists. An empty selection means every list,
+	 * which is the default and what `SyncEngine.loadProjects` expects.
+	 *
+	 * The list names have to come from the account, so this needs a connection.
+	 * Until then the raw ids are shown, so a selection made earlier is still
+	 * visible and clearable offline.
+	 */
+	private renderListFilter(root: HTMLElement): void {
+		const { settings } = this.plugin;
+
+		const summarise = (): string =>
+			settings.projectFilter.length === 0
+				? "Every list is synced. Select one or more to narrow it — worth doing while testing, so only a spare list is touched."
+				: `Syncing ${settings.projectFilter.length} of your lists. Everything else is ignored.`;
+
+		const setting = new Setting(root).setName("Lists to sync").setDesc(summarise());
+
+		setting.addButton((button) =>
+			button.setButtonText(this.projects ? "Refresh lists" : "Load lists").onClick(async () => {
+				if (!this.plugin.isConnected()) {
+					new Notice("Connect to TickTick first, then load your lists.");
+					return;
+				}
+
+				button.setDisabled(true).setButtonText("Loading…");
+				try {
+					this.projects = await this.plugin.createClient().listProjects();
+					if (this.projects.length === 0) new Notice("TickTick returned no lists.");
+					this.display();
+				} catch (error) {
+					new Notice(
+						`Could not load lists: ${error instanceof Error ? error.message : String(error)}`,
+					);
+					button.setDisabled(false).setButtonText("Load lists");
+				}
+			}),
+		);
+
+		setting.addExtraButton((button) =>
+			button
+				.setIcon("rotate-ccw")
+				.setTooltip("Clear the selection and sync every list")
+				.onClick(async () => {
+					settings.projectFilter = [];
+					await this.plugin.saveSettings();
+					this.display();
+				}),
+		);
+
+		if (!this.projects) {
+			if (settings.projectFilter.length > 0) {
+				root.createEl("p", {
+					cls: "setting-item-description",
+					text: `Limited to list ${settings.projectFilter.join(", ")}. Load your lists to see names.`,
+				});
+			}
+			return;
+		}
+
+		for (const project of this.projects) {
+			new Setting(root)
+				.setName(project.name)
+				.setDesc(project.closed ? `${project.id} · archived in TickTick` : project.id)
+				.addToggle((toggle) =>
+					toggle.setValue(settings.projectFilter.includes(project.id)).onChange(async (value) => {
+						const selected = new Set(settings.projectFilter);
+						if (value) selected.add(project.id);
+						else selected.delete(project.id);
+						settings.projectFilter = [...selected];
+						await this.plugin.saveSettings();
+						// Keep the summary above honest without redrawing the whole tab.
+						setting.setDesc(summarise());
+					}),
+				);
+		}
 	}
 
 	// --- Properties ---------------------------------------------------------
