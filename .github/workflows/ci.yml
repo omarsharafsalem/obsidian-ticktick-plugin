@@ -1,8 +1,10 @@
 name: CI
 
+# Branch pushes are covered by the pull_request trigger, so push is limited to
+# main — otherwise every commit on a PR branch runs the suite twice.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 # A new push to the same branch makes an in-flight run redundant.
