@@ -105,9 +105,8 @@ export default class TickTickSyncPlugin extends Plugin {
 	// --- Client wiring ------------------------------------------------------
 
 	isConnected(): boolean {
-		return this.settings.advancedMode
-			? this.settings.v2Session !== null
-			: this.settings.auth.tokens !== null;
+		if (this.settings.advancedMode) return this.settings.v2Session !== null;
+		return this.settings.auth.personalToken !== "" || this.settings.auth.tokens !== null;
 	}
 
 	oauthConfig(): OAuthConfig {
@@ -124,6 +123,11 @@ export default class TickTickSyncPlugin extends Plugin {
 
 	private async accessToken(): Promise<string> {
 		const auth = this.settings.auth;
+
+		// A personal token is already a bearer token, so there is nothing to
+		// exchange or refresh. It wins over OAuth when both are configured.
+		if (auth.personalToken) return auth.personalToken;
+
 		if (!auth.tokens) {
 			throw new Error("Not connected to TickTick. Open the plugin settings to connect.");
 		}

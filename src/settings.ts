@@ -80,6 +80,13 @@ export const DEFAULT_FIELD_MODES: FieldModes = {
 export type CompletedHandling = "keep" | "archive" | "delete";
 
 export interface AuthSettings {
+	/**
+	 * A token created in TickTick under Settings > Account > API Token.
+	 *
+	 * The Open API accepts it as a bearer token directly, so it replaces the
+	 * whole OAuth flow for a single account. Takes precedence over `tokens`.
+	 */
+	personalToken: string;
 	clientId: string;
 	clientSecret: string;
 	tokens: OAuthTokens | null;
@@ -121,6 +128,7 @@ export interface TickTickSyncSettings {
 
 export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	auth: {
+		personalToken: "",
 		clientId: "",
 		clientSecret: "",
 		tokens: null,

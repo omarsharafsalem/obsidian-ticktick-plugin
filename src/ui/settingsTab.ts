@@ -109,10 +109,46 @@ export class TickTickSettingTab extends PluginSettingTab {
 			return;
 		}
 
+		new Setting(root)
+			.setName("Personal API token")
+			.setDesc(
+				"The simplest way to connect. In the TickTick web app: avatar (top left) > Settings > " +
+					"Account > API Token. Create one, paste it here, and nothing below is needed. " +
+					"Treat it like a password — it grants access to your account.",
+			)
+			.addText((text) => {
+				text.inputEl.type = "password";
+				text.setPlaceholder("Paste your API token");
+				text.setValue(settings.auth.personalToken).onChange(async (value) => {
+					settings.auth.personalToken = value.trim();
+					await this.plugin.saveSettings();
+				});
+			})
+			.addExtraButton((button) =>
+				button
+					.setIcon("rotate-ccw")
+					.setTooltip("Clear the token and use OAuth instead")
+					.onClick(async () => {
+						settings.auth.personalToken = "";
+						await this.plugin.saveSettings();
+						this.display();
+					}),
+			);
+
+		if (settings.auth.personalToken) {
+			root.createEl("p", {
+				text:
+					"Using the personal API token. The app registration below is only needed for " +
+					"authorising other people's accounts — clear the token to use it instead.",
+				cls: "setting-item-description",
+			});
+			return;
+		}
+
 		root.createEl("p", {
 			text:
-				"Register an app at developer.ticktick.com and set its redirect URI to the address below, " +
-				"then paste the credentials here.",
+				"Or register an app at developer.ticktick.com and set its redirect URI to the address " +
+				"below, then paste the credentials here.",
 			cls: "setting-item-description",
 		});
 
