@@ -10,6 +10,12 @@ export type Priority = "none" | "low" | "medium" | "high";
 
 export type TaskStatus = "todo" | "completed" | "abandoned";
 
+/**
+ * TickTick's task kind, which decides where the body text lives on the wire: a
+ * checklist task keeps it in `desc`, everything else in `content`.
+ */
+export type TaskKind = "TEXT" | "CHECKLIST" | "NOTE";
+
 export interface ChecklistItem {
 	/** Present for items that already exist remotely. */
 	id?: string;
@@ -21,8 +27,20 @@ export interface Task {
 	id: string;
 	projectId: string;
 	title: string;
-	/** Free-form description body. */
+	/**
+	 * Free-form description body, read from whichever wire field this task kind
+	 * uses. {@link kind} records which, so a push writes it back to the same one.
+	 */
 	content: string;
+	kind?: TaskKind;
+	/**
+	 * The body field this task kind does *not* use, kept verbatim.
+	 *
+	 * TickTick returns both `content` and `desc`; writing only one back erases
+	 * the other. Deliberately outside {@link SYNCED_FIELDS} — it is carried
+	 * through untouched rather than merged.
+	 */
+	inactiveBody?: string;
 	status: TaskStatus;
 	priority: Priority;
 	tags: string[];

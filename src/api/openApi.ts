@@ -6,6 +6,7 @@ import {
 	type NewTask,
 	type Project,
 	type Task,
+	type TaskKind,
 	priorityFromWire,
 	priorityToWire,
 	statusFromWire,
@@ -49,15 +50,29 @@ export function normaliseChecklistItem(raw: unknown): ChecklistItem {
 	};
 }
 
+function asKind(value: unknown): TaskKind | undefined {
+	return value === "TEXT" || value === "CHECKLIST" || value === "NOTE" ? value : undefined;
+}
+
 export function normaliseTask(raw: unknown): Task {
 	const task = (raw ?? {}) as Json;
 	const isAllDay = task["isAllDay"] === true;
+
+	// A checklist task keeps its description in `desc` and its subtasks in
+	// `items`; every other kind uses `content`. Both fields are always returned,
+	// so the unused one is carried through rather than dropped.
+	const kind = asKind(task["kind"]);
+	const rawContent = asString(task["content"]) ?? "";
+	const rawDesc = asString(task["desc"]) ?? "";
+	const descIsBody = kind === "CHECKLIST";
 
 	return {
 		id: asString(task["id"]) ?? "",
 		projectId: asString(task["projectId"]) ?? "",
 		title: asString(task["title"]) ?? "",
-		content: asString(task["content"]) ?? asString(task["desc"]) ?? "",
+		kind,
+		content: descIsBody ? rawDesc : rawContent,
+		inactiveBody: descIsBody ? rawContent : rawDesc,
 		status: statusFromWire(task["status"]),
 		priority: priorityFromWire(task["priority"]),
 		tags: asArray(task["tags"]).filter((t): t is string => typeof t === "string"),
@@ -93,11 +108,22 @@ export function serialiseTask(task: NewTask & { id?: string }): Json {
 	const body: Json = {
 		title: task.title,
 		projectId: task.projectId,
-		content: task.content,
 		priority: priorityToWire(task.priority),
 		status: statusToWire(task.status),
 		isAllDay: task.isAllDay,
 	};
+
+	// Write the body back to the field this kind actually uses, and restore the
+	// other one untouched. Sending only `content` erases a checklist's `desc`.
+	if (task.kind === "CHECKLIST") {
+		body["desc"] = task.content;
+		body["content"] = task.inactiveBody ?? "";
+	} else {
+		body["content"] = task.content;
+		if (task.inactiveBody) body["desc"] = task.inactiveBody;
+	}
+
+	if (task.kind) body["kind"] = task.kind;
 
 	if (task.id) body["id"] = task.id;
 	if (task.tags.length > 0) body["tags"] = task.tags;
