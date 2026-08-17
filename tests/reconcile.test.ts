@@ -1,0 +1,211 @@
+import { describe, expect, it } from "vitest";
+import { blankTask, type Task } from "../src/api/types";
+import {
+	mergeSnapshots,
+	reconcile,
+	snapshotsEqual,
+	toSnapshot,
+	type ReconcileOptions,
+	type TaskSnapshot,
+} from "../src/sync/reconcile";
+
+function task(overrides: Partial<Task> = {}): Task {
+	return { ...blankTask("p1"), id: "t1", title: "Buy milk", ...overrides };
+}
+
+function snap(overrides: Partial<Task> = {}): TaskSnapshot {
+	return toSnapshot(task(overrides));
+}
+
+const options: ReconcileOptions = {
+	conflictPolicy: "newest",
+	deleteConflictPolicy: "restore",
+};
+
+describe("reconcile — creation", () => {
+	it("creates remotely when only the note exists", () => {
+		expect(reconcile({ local: snap() }, options).kind).toBe("createRemote");
+	});
+
+	it("creates locally when only the task exists", () => {
+		expect(reconcile({ remote: snap() }, options).kind).toBe("createLocal");
+	});
+
+	it("does nothing when neither side has anything", () => {
+		expect(reconcile({}, options).kind).toBe("noop");
+	});
+});
+
+describe("reconcile — updates", () => {
+	it("does nothing when both sides match the base", () => {
+		const base = snap();
+		expect(reconcile({ base, local: snap(), remote: snap() }, options).kind).toBe("noop");
+	});
+
+	it("pushes a local-only edit to TickTick", () => {
+		const base = snap();
+		const action = reconcile(
+			{ base, local: snap({ title: "Buy oat milk" }), remote: snap() },
+			options,
+		);
+		expect(action.kind).toBe("updateRemote");
+		if (action.kind === "updateRemote") {
+			expect(action.snapshot.title).toBe("Buy oat milk");
+			expect(action.conflicts).toEqual([]);
+		}
+	});
+
+	it("pulls a remote-only edit into the vault", () => {
+		const base = snap();
+		const action = reconcile(
+			{ base, local: snap(), remote: snap({ priority: "high" }) },
+			options,
+		);
+		expect(action.kind).toBe("updateLocal");
+		if (action.kind === "updateLocal") expect(action.snapshot.priority).toBe("high");
+	});
+
+	it("merges edits to different fields without a conflict", () => {
+		const base = snap();
+		const action = reconcile(
+			{
+				base,
+				local: snap({ title: "Buy oat milk" }),
+				remote: snap({ priority: "high" }),
+			},
+			options,
+		);
+
+		expect(action.kind).toBe("updateBoth");
+		if (action.kind === "updateBoth") {
+			expect(action.conflicts).toEqual([]);
+			expect(action.snapshot.title).toBe("Buy oat milk");
+			expect(action.snapshot.priority).toBe("high");
+		}
+	});
+
+	it("does not reopen a task completed remotely", () => {
+		// The classic two-way sync bug: without a base, a stale local 'todo'
+		// looks like an edit and reopens the task.
+		const base = snap({ status: "todo" });
+		const action = reconcile(
+			{ base, local: snap({ status: "todo" }), remote: snap({ status: "completed" }) },
+			options,
+		);
+
+		expect(action.kind).toBe("updateLocal");
+		if (action.kind === "updateLocal") expect(action.snapshot.status).toBe("completed");
+	});
+});
+
+describe("reconcile — conflicts", () => {
+	const base = snap({ title: "Original" });
+	const local = snap({ title: "Local edit" });
+	const remote = snap({ title: "Remote edit" });
+
+	it("prefers the newest side when timestamps are available", () => {
+		const action = reconcile(
+			{ base, local, remote },
+			{ ...options, localModifiedAt: 2000, remoteModifiedAt: 1000 },
+		);
+		expect(action.kind).toBe("updateRemote");
+		if (action.kind === "updateRemote") {
+			expect(action.snapshot.title).toBe("Local edit");
+			expect(action.conflicts).toEqual(["title"]);
+		}
+	});
+
+	it("falls back to TickTick when no timestamps are available", () => {
+		const action = reconcile({ base, local, remote }, options);
+		expect(action.kind).toBe("updateLocal");
+		if (action.kind === "updateLocal") expect(action.snapshot.title).toBe("Remote edit");
+	});
+
+	it("honours an explicit local preference", () => {
+		const action = reconcile({ base, local, remote }, { ...options, conflictPolicy: "preferLocal" });
+		if (action.kind === "updateRemote") expect(action.snapshot.title).toBe("Local edit");
+		else throw new Error(`expected updateRemote, got ${action.kind}`);
+	});
+
+	it("treats a first-time link with differing values as a conflict", () => {
+		const action = reconcile({ local, remote }, options);
+		if (action.kind === "updateLocal" || action.kind === "updateRemote") {
+			expect(action.conflicts).toContain("title");
+		} else {
+			throw new Error(`expected an update action, got ${action.kind}`);
+		}
+	});
+});
+
+describe("reconcile — deletion", () => {
+	it("deletes the note when the task was deleted and the note is untouched", () => {
+		const base = snap();
+		expect(reconcile({ base, local: snap() }, options).kind).toBe("deleteLocal");
+	});
+
+	it("deletes the task when the note was deleted and the task is untouched", () => {
+		const base = snap();
+		expect(reconcile({ base, remote: snap() }, options).kind).toBe("deleteRemote");
+	});
+
+	it("restores rather than discarding an edit made to the surviving side", () => {
+		const base = snap();
+		expect(reconcile({ base, local: snap({ title: "Edited" }) }, options).kind).toBe(
+			"restoreRemote",
+		);
+		expect(reconcile({ base, remote: snap({ title: "Edited" }) }, options).kind).toBe(
+			"restoreLocal",
+		);
+	});
+
+	it("propagates the delete when configured to", () => {
+		const base = snap();
+		const propagate: ReconcileOptions = { ...options, deleteConflictPolicy: "propagateDelete" };
+		expect(reconcile({ base, local: snap({ title: "Edited" }) }, propagate).kind).toBe("deleteLocal");
+		expect(reconcile({ base, remote: snap({ title: "Edited" }) }, propagate).kind).toBe(
+			"deleteRemote",
+		);
+	});
+
+	it("forgets a task that vanished from both sides", () => {
+		expect(reconcile({ base: snap() }, options).kind).toBe("forget");
+	});
+});
+
+describe("field equality", () => {
+	it("ignores tag order and casing", () => {
+		expect(snapshotsEqual(snap({ tags: ["a", "B"] }), snap({ tags: ["b", "A"] }))).toBe(true);
+	});
+
+	it("ignores trailing whitespace in text", () => {
+		expect(snapshotsEqual(snap({ content: "hi  \n" }), snap({ content: "hi" }))).toBe(true);
+	});
+
+	it("compares dates as instants, not strings", () => {
+		expect(
+			snapshotsEqual(
+				snap({ dueDate: "2026-08-20T10:00:00.000Z" }),
+				snap({ dueDate: "2026-08-20T12:00:00.000+02:00" }),
+			),
+		).toBe(true);
+	});
+
+	it("treats subtask order as significant", () => {
+		const a = snap({ items: [{ title: "one", completed: false }, { title: "two", completed: false }] });
+		const b = snap({ items: [{ title: "two", completed: false }, { title: "one", completed: false }] });
+		expect(snapshotsEqual(a, b)).toBe(false);
+	});
+});
+
+describe("mergeSnapshots", () => {
+	it("reports which fields conflicted", () => {
+		const result = mergeSnapshots(
+			snap({ title: "base", content: "base" }),
+			snap({ title: "local", content: "local" }),
+			snap({ title: "remote", content: "base" }),
+			options,
+		);
+		expect(result.conflicts).toEqual(["title"]);
+		expect(result.snapshot.content).toBe("local");
+	});
+});
