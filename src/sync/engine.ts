@@ -85,7 +85,7 @@ export class SyncEngine {
 			const projects = await this.loadProjects();
 			const projectNames = new Map(projects.map((p) => [p.id, p.name]));
 			const remote = await this.loadRemoteTasks(projects, report);
-			const local = await this.loadLocalNotes(report);
+			const local = await this.loadLocalNotes(report, projectNames);
 
 			await this.reconcileAll({ remote, local, projectNames, report });
 			await this.createUnlinkedNotes(local, projectNames, report);
@@ -131,7 +131,7 @@ export class SyncEngine {
 		// Completed tasks drop out of the project listing. Where the backend can
 		// report them we fold them back in, which is what lets a completion sync
 		// through instead of looking like a deletion.
-		if (this.deps.client.capabilities.completedHistory) {
+		if (this.deps.settings.syncCompletedTasks && this.deps.client.capabilities.completedHistory) {
 			try {
 				const to = new Date();
 				const from = new Date(to.getTime() - 90 * 24 * 60 * 60 * 1000);
@@ -153,12 +153,24 @@ export class SyncEngine {
 		return remote;
 	}
 
-	private async loadLocalNotes(report: SyncReport): Promise<LocalNote[]> {
+	private async loadLocalNotes(
+		report: SyncReport,
+		projectNames: Map<string, string>,
+	): Promise<LocalNote[]> {
 		const { notes, settings } = this.deps;
 		const files = notes.listMarkdown(settings.taskFolder);
+
+		// The list property holds a name, so reading a note means turning it back
+		// into an id. Matched case-insensitively, since the value is hand-editable.
+		const idsByName = new Map<string, string>();
+		for (const [id, name] of projectNames) idsByName.set(name.trim().toLowerCase(), id);
+
 		const mapperOptions = {
 			properties: settings.properties,
 			inlineTags: settings.inlineTags,
+			resolveProject: (nameOrId: string) =>
+				idsByName.get(nameOrId.trim().toLowerCase()) ??
+				(projectNames.has(nameOrId) ? nameOrId : undefined),
 		};
 
 		const result: LocalNote[] = [];
@@ -322,7 +334,12 @@ export class SyncEngine {
 				const created = await client.createTask(
 					this.toNewTask(action.snapshot, localNote.snapshot.projectId),
 				);
-				await this.stampNote(localNote.file, created, action.snapshot);
+				await this.stampNote(
+					localNote.file,
+					created,
+					action.snapshot,
+					projectNames.get(created.projectId),
+				);
 				store.set(this.entryFor(created, localNote.file.path, action.snapshot, Date.now()));
 				report.createdRemote++;
 				return;
@@ -399,7 +416,7 @@ export class SyncEngine {
 				const created = await client.createTask(
 					this.toNewTask(note.snapshot, note.snapshot.projectId || inbox || ""),
 				);
-				await this.stampNote(note.file, created, note.snapshot);
+				await this.stampNote(note.file, created, note.snapshot, projectNames.get(created.projectId));
 				store.set(this.entryFor(created, note.file.path, note.snapshot, Date.now()));
 				report.createdRemote++;
 			} catch (error) {
@@ -410,12 +427,15 @@ export class SyncEngine {
 
 	private async writeNewNote(task: Task, projectNames: Map<string, string>): Promise<TFile> {
 		const { notes, settings } = this.deps;
+		const projectName = projectNames.get(task.projectId);
 		const path = taskNotePath(task.title, {
 			taskFolder: this.folderFor(task),
-			projectName: projectNames.get(task.projectId),
-			folderPerProject: settings.folderPerProject,
+			projectName,
+			// An explicit folder for this list already places the note; adding a
+			// per-list subfolder inside it would nest a second time.
+			folderPerProject: settings.folderPerProject && !settings.listFolders[task.projectId],
 		});
-		return notes.create(path, this.render(task));
+		return notes.create(path, this.render(task, projectName));
 	}
 
 	/** Writes a task into an existing note, renaming it when the title moved. */
@@ -425,12 +445,13 @@ export class SyncEngine {
 		projectNames: Map<string, string>,
 	): Promise<TFile> {
 		const { notes, settings } = this.deps;
-		await notes.write(file, this.render(task));
+		const projectName = projectNames.get(task.projectId);
+		await notes.write(file, this.render(task, projectName));
 
 		const desired = taskNotePath(task.title, {
 			taskFolder: this.folderFor(task),
-			projectName: projectNames.get(task.projectId),
-			folderPerProject: settings.folderPerProject,
+			projectName,
+			folderPerProject: settings.folderPerProject && !settings.listFolders[task.projectId],
 		});
 
 		// Covers both a renamed task and a task moved to a different list.
@@ -442,24 +463,43 @@ export class SyncEngine {
 	}
 
 	/** Records the freshly assigned remote id into a locally authored note. */
-	private async stampNote(file: TFile, task: Task, snapshot: TaskSnapshot): Promise<void> {
+	private async stampNote(
+		file: TFile,
+		task: Task,
+		snapshot: TaskSnapshot,
+		projectName?: string,
+	): Promise<void> {
 		const merged: Task = { ...task, ...snapshot, id: task.id, projectId: task.projectId };
-		await this.deps.notes.write(file, this.render(merged));
+		await this.deps.notes.write(file, this.render(merged, projectName));
 	}
 
-	private render(task: Task) {
+	private render(task: Task, projectName?: string) {
 		const { settings } = this.deps;
-		return taskToNote(task, {
-			properties: settings.properties,
-			inlineTags: settings.inlineTags,
-		});
+		return taskToNote(
+			task,
+			{
+				properties: settings.properties,
+				inlineTags: settings.inlineTags,
+			},
+			projectName,
+		);
 	}
 
+	/**
+	 * Where a task's note belongs.
+	 *
+	 * An explicit per-list folder wins over everything, so one list can live
+	 * inside an existing project folder while the rest stay together. Archiving
+	 * a completed task still overrides both.
+	 */
 	private folderFor(task: Task): string {
 		const { settings } = this.deps;
-		return task.status === "completed" && settings.completedHandling === "archive"
-			? settings.archiveFolder
-			: settings.taskFolder;
+
+		if (task.status === "completed" && settings.completedHandling === "archive") {
+			return settings.archiveFolder;
+		}
+
+		return settings.listFolders[task.projectId]?.trim() || settings.taskFolder;
 	}
 
 	private toNewTask(snapshot: TaskSnapshot, projectId: string): NewTask {

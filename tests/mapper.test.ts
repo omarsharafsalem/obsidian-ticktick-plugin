@@ -199,6 +199,76 @@ describe("round trip", () => {
 	});
 });
 
+describe("the list property", () => {
+	it("writes the list's name, not its id", () => {
+		const note = taskToNote(task({ projectId: "6226ff98" }), options, "Errands");
+		expect(note.frontmatter.list).toBe("Errands");
+	});
+
+	it("falls back to the id when the name is unknown", () => {
+		const note = taskToNote(task({ projectId: "6226ff98" }), options);
+		expect(note.frontmatter.list).toBe("6226ff98");
+	});
+
+	it("turns the name back into an id when reading", () => {
+		const parsed = noteToTask({ frontmatter: { list: "Errands" }, body: "" }, "Buy milk", {
+			...options,
+			resolveProject: (name) => (name.toLowerCase() === "errands" ? "6226ff98" : undefined),
+		});
+
+		expect(parsed.projectId).toBe("6226ff98");
+	});
+
+	it("passes an unrecognised value through rather than guessing", () => {
+		const parsed = noteToTask({ frontmatter: { list: "6226ff98" }, body: "" }, "Buy milk", {
+			...options,
+			resolveProject: () => undefined,
+		});
+
+		expect(parsed.projectId).toBe("6226ff98");
+	});
+
+	it("never writes the etag into the note", () => {
+		const note = taskToNote(task({ etag: "t3kc5m5f" }), options);
+		expect(JSON.stringify(note.frontmatter)).not.toContain("t3kc5m5f");
+	});
+});
+
+describe("list-typed properties", () => {
+	// status and priority are registered as list-typed so they render as chips,
+	// which means Obsidian hands them back wrapped in an array.
+	it("reads status and priority out of a single-element list", () => {
+		const parsed = noteToTask(
+			{ frontmatter: { status: ["completed"], priority: ["high"] }, body: "" },
+			"Buy milk",
+			options,
+		);
+
+		expect(parsed.status).toBe("completed");
+		expect(parsed.priority).toBe("high");
+	});
+
+	it("still reads them written plainly by hand", () => {
+		const parsed = noteToTask(
+			{ frontmatter: { status: "completed", priority: "high" }, body: "" },
+			"Buy milk",
+			options,
+		);
+
+		expect(parsed.status).toBe("completed");
+		expect(parsed.priority).toBe("high");
+	});
+
+	it("reads a list-wrapped list name", () => {
+		const parsed = noteToTask({ frontmatter: { list: ["Errands"] }, body: "" }, "Buy milk", {
+			...options,
+			resolveProject: (name) => (name === "Errands" ? "6226ff98" : undefined),
+		});
+
+		expect(parsed.projectId).toBe("6226ff98");
+	});
+});
+
 describe("restoreItemMetadata", () => {
 	const remote = [
 		{ id: "i1", title: "oat", completed: false },

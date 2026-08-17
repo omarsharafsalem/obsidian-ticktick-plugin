@@ -12,7 +12,6 @@ import type { OAuthTokens } from "./auth/oauth";
 export interface PropertyNames {
 	id: string;
 	project: string;
-	etag: string;
 	title: string;
 	status: string;
 	priority: string;
@@ -28,7 +27,6 @@ export interface PropertyNames {
 export const DEFAULT_PROPERTIES: PropertyNames = {
 	id: "ticktick_id",
 	project: "list",
-	etag: "ticktick_etag",
 	title: "ticktick_title",
 	status: "status",
 	priority: "priority",
@@ -52,8 +50,13 @@ export const PROPERTY_TYPES: Partial<Record<keyof PropertyNames, string>> = {
 	completed: "datetime",
 	tags: "tags",
 	reminders: "multitext",
-	status: "text",
-	priority: "text",
+	// Obsidian has no single-select type. "multitext" is the closest: it renders
+	// as chips and suggests values already used in the vault, which beats a free
+	// text box for a field with a fixed set of values. The mapper reads either a
+	// bare value or a one-element list, so hand-edited notes still parse.
+	status: "multitext",
+	priority: "multitext",
+	project: "multitext",
 };
 
 /** Per-field direction control, mirroring how Notion's TickTick sync works. */
@@ -105,6 +108,23 @@ export interface TickTickSyncSettings {
 	/** Empty means every project. */
 	projectFilter: string[];
 
+	/**
+	 * Where each list's notes are created, keyed by project id.
+	 *
+	 * A list with no entry falls back to {@link taskFolder}, so this can be set
+	 * for one list without disturbing the rest. Overrides `folderPerProject`.
+	 */
+	listFolders: Record<string, string>;
+
+	/**
+	 * Pull tasks that are already completed in TickTick.
+	 *
+	 * Off by default: it creates a note for everything finished in the last 90
+	 * days, which buries the open tasks. A task completed *after* it has synced
+	 * still updates either way — this only controls the initial backfill.
+	 */
+	syncCompletedTasks: boolean;
+
 	properties: PropertyNames;
 	fieldModes: FieldModes;
 	registerPropertyTypes: boolean;
@@ -134,6 +154,8 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	syncIntervalMinutes: 5,
 	syncOnStartup: true,
 	projectFilter: [],
+	listFolders: {},
+	syncCompletedTasks: false,
 	properties: { ...DEFAULT_PROPERTIES },
 	fieldModes: { ...DEFAULT_FIELD_MODES },
 	registerPropertyTypes: true,
@@ -162,5 +184,6 @@ export function mergeSettings(stored: unknown): TickTickSyncSettings {
 		auth: { ...DEFAULT_SETTINGS.auth, ...(raw.auth ?? {}) },
 		properties: { ...DEFAULT_PROPERTIES, ...(raw.properties ?? {}) },
 		fieldModes: { ...DEFAULT_FIELD_MODES, ...(raw.fieldModes ?? {}) },
+		listFolders: { ...(raw.listFolders ?? {}) },
 	};
 }

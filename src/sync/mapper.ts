@@ -26,6 +26,14 @@ export interface MapperOptions {
 	properties: PropertyNames;
 	/** Also harvest `#tags` written in the note body. */
 	inlineTags: boolean;
+	/**
+	 * Turns whatever is written in the list property back into a project id.
+	 *
+	 * The property holds a list *name*, because an id is meaningless to read and
+	 * impossible to edit deliberately. Supplied by the engine, which knows the
+	 * account's lists; kept as a plain function so this module stays pure.
+	 */
+	resolveProject?: (nameOrId: string) => string | undefined;
 }
 
 export const DEFAULT_MAPPER_OPTIONS: MapperOptions = {
@@ -42,7 +50,6 @@ export interface ParsedNote {
 	/** Undefined for a note the user wrote by hand that has never synced. */
 	id?: string;
 	projectId?: string;
-	etag?: string;
 	title: string;
 	content: string;
 	status: TaskStatus;
@@ -130,16 +137,20 @@ export function buildBody(content: string, items: ChecklistItem[]): string {
 export function taskToNote(
 	task: Task,
 	options: MapperOptions = DEFAULT_MAPPER_OPTIONS,
+	projectName?: string,
 ): NoteContent {
 	const p = options.properties;
 	const frontmatter: Record<string, unknown> = {
 		[p.id]: task.id,
-		[p.project]: task.projectId,
+		// The list's name, not its id: the property is meant to be read and
+		// edited. Falls back to the id only when the name is unknown.
+		[p.project]: projectName ?? task.projectId,
 		[p.status]: task.status,
 		[p.priority]: task.priority,
 	};
 
-	if (task.etag) frontmatter[p.etag] = task.etag;
+	// The etag is a server version token and deliberately never reaches the
+	// note — it is bookkeeping, kept in the plugin's own state instead.
 	if (titleNeedsFrontmatter(task.title)) frontmatter[p.title] = task.title;
 
 	const due = toFrontmatterDate(task.dueDate, task.isAllDay);
@@ -184,7 +195,19 @@ function readStringArray(value: unknown): string[] {
 	return [];
 }
 
-function readStatus(value: unknown, completedAt: unknown): TaskStatus {
+/**
+ * Unwraps a property Obsidian stores as a list.
+ *
+ * `status` and `priority` are registered as list-typed so they render as chips
+ * with suggestions, which means their value arrives as `["todo"]` rather than
+ * `"todo"`. Hand-written notes still use the bare form, so both are accepted.
+ */
+function readScalar(value: unknown): unknown {
+	return Array.isArray(value) ? value[0] : value;
+}
+
+function readStatus(raw: unknown, completedAt: unknown): TaskStatus {
+	const value = readScalar(raw);
 	if (typeof value === "string") {
 		const normalised = value.trim().toLowerCase();
 		if (normalised === "completed" || normalised === "done" || normalised === "x") {
@@ -200,7 +223,8 @@ function readStatus(value: unknown, completedAt: unknown): TaskStatus {
 	return completedAt ? "completed" : "todo";
 }
 
-function readPriority(value: unknown): Priority {
+function readPriority(raw: unknown): Priority {
+	const value = readScalar(raw);
 	if (typeof value === "string") {
 		const normalised = value.trim().toLowerCase();
 		if (normalised === "high" || normalised === "medium" || normalised === "low") {
@@ -215,7 +239,8 @@ function readPriority(value: unknown): Priority {
 	return "none";
 }
 
-function readString(value: unknown): string | undefined {
+function readString(raw: unknown): string | undefined {
+	const value = readScalar(raw);
 	if (typeof value === "string" && value.trim().length > 0) return value.trim();
 	if (typeof value === "number") return String(value);
 	return undefined;
@@ -253,10 +278,15 @@ export function noteToTask(
 	const bodyTags = options.inlineTags ? extractTags(note.body) : [];
 	const tags = dedupeTags([...propertyTags, ...bodyTags]);
 
+	// The list property holds a name, so it has to be turned back into an id.
+	// An unrecognised value is passed through untouched: it may already be an id,
+	// and guessing would silently move the task to the wrong list.
+	const projectRef = readString(fm[p.project]);
+	const projectId = projectRef ? (options.resolveProject?.(projectRef) ?? projectRef) : undefined;
+
 	return {
 		id: readString(fm[p.id]),
-		projectId: readString(fm[p.project]),
-		etag: readString(fm[p.etag]),
+		projectId,
 		title: readString(fm[p.title]) ?? filenameTitle,
 		content,
 		status: readStatus(fm[p.status], fm[p.completed]),

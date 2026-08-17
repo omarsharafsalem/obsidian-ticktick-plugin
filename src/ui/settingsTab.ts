@@ -24,7 +24,6 @@ const FIELD_LABELS: Record<SyncedField, string> = {
 const PROPERTY_LABELS: Record<keyof PropertyNames, string> = {
 	id: "Task ID",
 	project: "List",
-	etag: "Version tag",
 	title: "Title override",
 	status: "Status",
 	priority: "Priority",
@@ -281,6 +280,20 @@ export class TickTickSettingTab extends PluginSettingTab {
 		);
 
 		new Setting(root)
+			.setName("Pull tasks already completed")
+			.setDesc(
+				"Off by default. When on, the first sync creates a note for everything completed in the " +
+					"last 90 days, which buries your open tasks. A task you complete after it has synced " +
+					"updates either way — this only controls the initial backfill.",
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(settings.syncCompletedTasks).onChange(async (value) => {
+					settings.syncCompletedTasks = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(root)
 			.setName("Completed tasks")
 			.setDesc("What to do with a note once its task is completed.")
 			.addDropdown((dropdown) =>
@@ -373,7 +386,20 @@ export class TickTickSettingTab extends PluginSettingTab {
 		for (const project of this.projects) {
 			new Setting(root)
 				.setName(project.name)
-				.setDesc(project.closed ? `${project.id} · archived in TickTick` : project.id)
+				.setDesc(
+					project.closed
+						? "Archived in TickTick. Leave the folder blank to use the task folder."
+						: "Leave the folder blank to use the task folder.",
+				)
+				.addText((text) => {
+					text.setPlaceholder("Folder for this list");
+					text.setValue(settings.listFolders[project.id] ?? "").onChange(async (value) => {
+						const folder = value.trim();
+						if (folder) settings.listFolders[project.id] = folder;
+						else delete settings.listFolders[project.id];
+						await this.plugin.saveSettings();
+					});
+				})
 				.addToggle((toggle) =>
 					toggle.setValue(settings.projectFilter.includes(project.id)).onChange(async (value) => {
 						const selected = new Set(settings.projectFilter);
