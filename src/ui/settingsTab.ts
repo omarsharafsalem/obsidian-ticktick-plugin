@@ -25,6 +25,7 @@ const FIELD_LABELS: Record<SyncedField, string> = {
 	repeatFlag: "Recurrence",
 	items: "Subtasks",
 	projectId: "List",
+	parentId: "Parent task",
 };
 
 const PROPERTY_LABELS: Record<keyof PropertyNames, string> = {
@@ -40,6 +41,7 @@ const PROPERTY_LABELS: Record<keyof PropertyNames, string> = {
 	reminders: "Reminders",
 	completed: "Completed at",
 	parent: "Parent task",
+	children: "Child tasks",
 };
 
 export class TickTickSettingTab extends PluginSettingTab {

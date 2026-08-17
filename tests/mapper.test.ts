@@ -201,7 +201,7 @@ describe("round trip", () => {
 
 describe("the list property", () => {
 	it("writes the list's name, not its id", () => {
-		const note = taskToNote(task({ projectId: "6226ff98" }), options, "Errands");
+		const note = taskToNote(task({ projectId: "6226ff98" }), options, { projectName: "Errands" });
 		expect(note.frontmatter.list).toBe("Errands");
 	});
 
@@ -348,6 +348,102 @@ describe("value labels", () => {
 
 		expect(parsed.status).toBe("completed");
 		expect(parsed.priority).toBe("high");
+	});
+});
+
+describe("parent and child links", () => {
+	it("writes the parent as a wikilink", () => {
+		const note = taskToNote(task({ parentId: "p-1" }), options, {
+			parent: { title: "Plan the trip" },
+		});
+
+		expect(note.frontmatter.parent_task).toBe("[[Plan the trip]]");
+	});
+
+	it("qualifies with a path when the title is ambiguous", () => {
+		const note = taskToNote(task({ parentId: "p-1" }), options, {
+			parent: { title: "Buy milk", path: "Tasks/Work/Buy milk" },
+		});
+
+		expect(note.frontmatter.parent_task).toBe("[[Tasks/Work/Buy milk|Buy milk]]");
+	});
+
+	it("lists children as links", () => {
+		const note = taskToNote(task(), options, {
+			children: [{ title: "Book flights" }, { title: "Pack" }],
+		});
+
+		expect(note.frontmatter.child_tasks).toEqual(["[[Book flights]]", "[[Pack]]"]);
+	});
+
+	it("omits the children property when there are none", () => {
+		const note = taskToNote(task(), options);
+		expect(note.frontmatter.child_tasks).toBeUndefined();
+	});
+
+	it("falls back to the raw id when the parent's note is unknown", () => {
+		const note = taskToNote(task({ parentId: "p-1" }), options);
+		expect(note.frontmatter.parent_task).toBe("p-1");
+	});
+
+	it("resolves a link back to a task id", () => {
+		const parsed = noteToTask(
+			{ frontmatter: { parent_task: "[[Plan the trip]]" }, body: "" },
+			"Book flights",
+			{ ...options, resolveTaskLink: (target) => (target === "Plan the trip" ? "p-1" : undefined) },
+		);
+
+		expect(parsed.parentId).toBe("p-1");
+	});
+
+	it("resolves a path-qualified link by its path", () => {
+		const parsed = noteToTask(
+			{ frontmatter: { parent_task: "[[Tasks/Work/Buy milk|Buy milk]]" }, body: "" },
+			"Sub",
+			{
+				...options,
+				resolveTaskLink: (target) => (target === "Tasks/Work/Buy milk" ? "p-9" : undefined),
+			},
+		);
+
+		expect(parsed.parentId).toBe("p-9");
+	});
+
+	// A parent whose note has not synced yet must not look like "no parent",
+	// or the push would restructure the task in TickTick.
+	it("keeps the existing parent when a link cannot be resolved", () => {
+		const parsed = noteToTask(
+			{ frontmatter: { parent_task: "[[Not synced yet]]" }, body: "" },
+			"Book flights",
+			{ ...options, resolveTaskLink: () => undefined },
+		);
+
+		expect(parsed.parentUnresolved).toBe(true);
+
+		const restored = parsedNoteToTask(parsed, { ...blankTask("p1"), parentId: "existing" });
+		expect(restored.parentId).toBe("existing");
+	});
+
+	it("clearing the property does remove the parent", () => {
+		const parsed = noteToTask({ frontmatter: {}, body: "" }, "Book flights", options);
+		const restored = parsedNoteToTask(parsed, { ...blankTask("p1"), parentId: "existing" });
+
+		expect(restored.parentId).toBeUndefined();
+	});
+
+	it("still accepts a bare task id written by an older sync", () => {
+		const parsed = noteToTask({ frontmatter: { parent_task: "p-1" }, body: "" }, "Sub", options);
+		expect(parsed.parentId).toBe("p-1");
+	});
+
+	it("ignores the derived children property when reading", () => {
+		const parsed = noteToTask(
+			{ frontmatter: { child_tasks: ["[[Book flights]]"] }, body: "" },
+			"Plan the trip",
+			options,
+		);
+
+		expect(parsed.parentId).toBeUndefined();
 	});
 });
 

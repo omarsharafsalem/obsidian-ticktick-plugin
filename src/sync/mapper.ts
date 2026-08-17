@@ -17,6 +17,45 @@ import type { ChecklistItem, Priority, Task, TaskStatus } from "../api/types";
 
 export const SUBTASK_HEADING = "## Subtasks";
 
+/** A task referenced from another task's note, as an Obsidian wikilink. */
+export interface TaskLink {
+	/** The note's basename, which is the task title once made filename-safe. */
+	title: string;
+	/**
+	 * Extension-less vault path, set only when the bare title is ambiguous.
+	 *
+	 * Two tasks can share a title, and `[[Buy milk]]` would then resolve to
+	 * whichever note Obsidian picked — re-parenting the wrong task on the next
+	 * push. Qualifying with the path makes the link exact.
+	 */
+	path?: string;
+}
+
+/** Relationships the mapper cannot work out from a task on its own. */
+export interface NoteContext {
+	projectName?: string;
+	parent?: TaskLink;
+	/** Derived from whichever tasks point at this one; never read back. */
+	children?: TaskLink[];
+}
+
+/** `[[path|title]]` when disambiguation is needed, `[[title]]` otherwise. */
+export function formatWikilink(link: TaskLink): string {
+	return link.path ? `[[${link.path}|${link.title}]]` : `[[${link.title}]]`;
+}
+
+/**
+ * Pulls the link target out of `[[target]]` or `[[target|alias]]`.
+ *
+ * Returns undefined for anything that is not a wikilink, so a value left as a
+ * bare task id still parses.
+ */
+export function parseWikilink(value: string): string | undefined {
+	const match = /^\s*\[\[([^\]]+)\]\]\s*$/.exec(value);
+	if (!match) return undefined;
+	return (match[1].split("|")[0] ?? "").trim() || undefined;
+}
+
 /** Characters Obsidian or the filesystem will not accept in a note name. */
 const ILLEGAL_FILENAME_CHARS = /[\\/:*?"<>|#^[\]]/g;
 
@@ -36,6 +75,8 @@ export interface MapperOptions {
 	resolveProject?: (nameOrId: string) => string | undefined;
 	/** The words this vault uses for statuses, priorities and reminders. */
 	labels?: ValueLabels;
+	/** Turns a wikilink target — a note title or path — back into a task id. */
+	resolveTaskLink?: (target: string) => string | undefined;
 }
 
 export const DEFAULT_MAPPER_OPTIONS: MapperOptions = {
@@ -70,6 +111,13 @@ export interface ParsedNote {
 	/** Undefined for a note the user wrote by hand that has never synced. */
 	id?: string;
 	projectId?: string;
+	/**
+	 * True when the parent property holds a link that could not be resolved.
+	 *
+	 * Distinguishes "the user cleared this" from "the parent has not synced
+	 * yet", so a link to a not-yet-created note never silently un-parents.
+	 */
+	parentUnresolved?: boolean;
 	title: string;
 	content: string;
 	status: TaskStatus;
@@ -157,8 +205,9 @@ export function buildBody(content: string, items: ChecklistItem[]): string {
 export function taskToNote(
 	task: Task,
 	options: MapperOptions = DEFAULT_MAPPER_OPTIONS,
-	projectName?: string,
+	context: NoteContext = {},
 ): NoteContent {
+	const { projectName } = context;
 	const p = options.properties;
 	const labels = options.labels ?? DEFAULT_VALUE_LABELS;
 	const frontmatter: Record<string, unknown> = {
@@ -191,7 +240,17 @@ export function taskToNote(
 			(trigger) => labels.reminders[trigger] ?? trigger,
 		);
 	}
-	if (task.parentId) frontmatter[p.parent] = task.parentId;
+	// Written as a wikilink so the relationship is navigable and shows in the
+	// graph. Falls back to the raw id only when the parent's note is unknown —
+	// it may not have synced yet, and the next pass will upgrade it.
+	if (context.parent) frontmatter[p.parent] = formatWikilink(context.parent);
+	else if (task.parentId) frontmatter[p.parent] = task.parentId;
+
+	// Derived from whichever tasks point at this one, so it is rewritten every
+	// sync. Re-parenting is done on the child's own parent property.
+	if (context.children && context.children.length > 0) {
+		frontmatter[p.children] = context.children.map(formatWikilink);
+	}
 	if (task.completedTime) frontmatter[p.completed] = task.completedTime;
 
 	return { frontmatter, body: buildBody(task.content, task.items) };
@@ -226,6 +285,31 @@ function readReminders(value: unknown, labels?: ValueLabels): string[] {
 		}
 		return entry;
 	});
+}
+
+/**
+ * Reads the parent property, which holds a wikilink to the parent's note.
+ *
+ * An empty property means the parent was deliberately removed. A link that
+ * resolves to nothing is treated as *unknown* rather than empty, because the
+ * parent's note may simply not exist yet — clearing the parent on that basis
+ * would silently restructure the task in TickTick.
+ */
+function readParent(
+	raw: unknown,
+	options: MapperOptions,
+): { parentId?: string; parentUnresolved?: boolean } {
+	const written = readString(raw);
+	if (!written) return {};
+
+	const target = parseWikilink(written);
+	if (target === undefined) {
+		// Not a link, so it is still a plain task id from an older note.
+		return { parentId: written };
+	}
+
+	const resolved = options.resolveTaskLink?.(target);
+	return resolved ? { parentId: resolved } : { parentUnresolved: true };
 }
 
 function readStringArray(value: unknown): string[] {
@@ -358,7 +442,7 @@ export function noteToTask(
 		isAllDay,
 		reminders: readReminders(fm[p.reminders], labels),
 		repeatFlag: readString(fm[p.recurrence]),
-		parentId: readString(fm[p.parent]),
+		...readParent(fm[p.parent], options),
 		items,
 	};
 }
@@ -460,7 +544,9 @@ export function parsedNoteToTask(parsed: ParsedNote, base: Task): Task {
 		isAllDay: parsed.isAllDay,
 		reminders: parsed.reminders,
 		repeatFlag: parsed.repeatFlag,
-		parentId: parsed.parentId,
+		// An unresolvable link leaves the existing parent alone rather than
+		// dropping it — see readParent.
+		parentId: parsed.parentUnresolved ? base.parentId : parsed.parentId,
 		items: parsed.items,
 		projectId: parsed.projectId ?? base.projectId,
 	};

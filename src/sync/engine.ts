@@ -4,7 +4,15 @@ import { blankTask, type NewTask, type Project, type Task } from "../api/types";
 import type { TickTickSyncSettings } from "../settings";
 import { NoteRepository, taskNotePath } from "../vault/notes";
 import { applyFieldModes } from "./fieldModes";
-import { noteToTask, parsedNoteToTask, restoreItemMetadata, taskToNote } from "./mapper";
+import {
+	noteToTask,
+	parsedNoteToTask,
+	restoreItemMetadata,
+	sanitiseFilename,
+	taskToNote,
+	type NoteContext,
+	type TaskLink,
+} from "./mapper";
 import { reconcile, toSnapshot, type SyncAction, type TaskSnapshot } from "./reconcile";
 import type { SyncEntry, SyncStore } from "./state";
 
@@ -64,8 +72,27 @@ interface RemoteRecord {
 	snapshot: TaskSnapshot;
 }
 
+/** Parent and child relationships, resolved across every task in one pass. */
+interface TaskLinkIndex {
+	contextFor: (task: Task) => NoteContext;
+	resolveTaskLink: (target: string) => string | undefined;
+}
+
+const NO_LINKS: TaskLinkIndex = {
+	contextFor: () => ({}),
+	resolveTaskLink: () => undefined,
+};
+
 export class SyncEngine {
 	private running = false;
+
+	/**
+	 * Rebuilt at the start of each pass, once the remote tasks are known.
+	 *
+	 * Held as state rather than threaded through every write because a pass is
+	 * single-flight — `running` guarantees no two overlap.
+	 */
+	private links: TaskLinkIndex = NO_LINKS;
 
 	constructor(private readonly deps: EngineDeps) {}
 
@@ -85,6 +112,7 @@ export class SyncEngine {
 			const projects = await this.loadProjects();
 			const projectNames = new Map(projects.map((p) => [p.id, p.name]));
 			const remote = await this.loadRemoteTasks(projects, report);
+			this.links = this.buildLinkIndex(remote, projectNames);
 			const local = await this.loadLocalNotes(report, projectNames);
 
 			await this.reconcileAll({ remote, local, projectNames, report });
@@ -172,6 +200,7 @@ export class SyncEngine {
 			resolveProject: (nameOrId: string) =>
 				idsByName.get(nameOrId.trim().toLowerCase()) ??
 				(projectNames.has(nameOrId) ? nameOrId : undefined),
+			resolveTaskLink: this.links.resolveTaskLink,
 		};
 
 		const result: LocalNote[] = [];
@@ -193,6 +222,75 @@ export class SyncEngine {
 		}
 
 		return result;
+	}
+
+	// --- Task links -----------------------------------------------------------
+
+	/**
+	 * Works out how each task should link to its parent and its children.
+	 *
+	 * A task only knows its `parentId`, so the child list has to be derived by
+	 * asking which tasks point at it. Titles are only unique by luck, so a link
+	 * is qualified with its note path whenever the bare title is ambiguous.
+	 */
+	private buildLinkIndex(
+		remote: Map<string, RemoteRecord>,
+		projectNames: Map<string, string>,
+	): TaskLinkIndex {
+		const tasks = [...remote.values()].map((record) => record.task);
+
+		const titleUses = new Map<string, number>();
+		for (const task of tasks) {
+			const key = sanitiseFilename(task.title).toLowerCase();
+			titleUses.set(key, (titleUses.get(key) ?? 0) + 1);
+		}
+
+		const linkFor = (task: Task): TaskLink => {
+			const title = sanitiseFilename(task.title);
+			const ambiguous = (titleUses.get(title.toLowerCase()) ?? 0) > 1;
+			return {
+				title,
+				path: ambiguous ? this.notePathFor(task, projectNames).replace(/\.md$/, "") : undefined,
+			};
+		};
+
+		const children = new Map<string, TaskLink[]>();
+		const idByTarget = new Map<string, string>();
+
+		for (const task of tasks) {
+			const link = linkFor(task);
+			idByTarget.set(link.title.toLowerCase(), task.id);
+			if (link.path) idByTarget.set(link.path.toLowerCase(), task.id);
+
+			if (!task.parentId) continue;
+			const siblings = children.get(task.parentId) ?? [];
+			siblings.push(link);
+			children.set(task.parentId, siblings);
+		}
+
+		const byId = new Map(tasks.map((task) => [task.id, task]));
+
+		return {
+			contextFor: (task: Task): NoteContext => {
+				const parent = task.parentId ? byId.get(task.parentId) : undefined;
+				return {
+					projectName: projectNames.get(task.projectId),
+					parent: parent ? linkFor(parent) : undefined,
+					children: children.get(task.id),
+				};
+			},
+			resolveTaskLink: (target: string) => idByTarget.get(target.trim().toLowerCase()),
+		};
+	}
+
+	/** The path a task's note should occupy, used to disambiguate links. */
+	private notePathFor(task: Task, projectNames: Map<string, string>): string {
+		const { settings } = this.deps;
+		return taskNotePath(task.title, {
+			taskFolder: this.folderFor(task),
+			projectName: projectNames.get(task.projectId),
+			folderPerProject: settings.folderPerProject && !settings.listFolders[task.projectId],
+		});
 	}
 
 	// --- Reconciliation -----------------------------------------------------
@@ -335,12 +433,7 @@ export class SyncEngine {
 				const created = await client.createTask(
 					this.toNewTask(action.snapshot, localNote.snapshot.projectId),
 				);
-				await this.stampNote(
-					localNote.file,
-					created,
-					action.snapshot,
-					projectNames.get(created.projectId),
-				);
+				await this.stampNote(localNote.file, created, action.snapshot);
 				store.set(this.entryFor(created, localNote.file.path, action.snapshot, Date.now()));
 				report.createdRemote++;
 				return;
@@ -417,7 +510,7 @@ export class SyncEngine {
 				const created = await client.createTask(
 					this.toNewTask(note.snapshot, note.snapshot.projectId || inbox || ""),
 				);
-				await this.stampNote(note.file, created, note.snapshot, projectNames.get(created.projectId));
+				await this.stampNote(note.file, created, note.snapshot);
 				store.set(this.entryFor(created, note.file.path, note.snapshot, Date.now()));
 				report.createdRemote++;
 			} catch (error) {
@@ -436,7 +529,7 @@ export class SyncEngine {
 			// per-list subfolder inside it would nest a second time.
 			folderPerProject: settings.folderPerProject && !settings.listFolders[task.projectId],
 		});
-		return notes.create(path, this.render(task, projectName));
+		return notes.create(path, this.render(task));
 	}
 
 	/** Writes a task into an existing note, renaming it when the title moved. */
@@ -447,7 +540,7 @@ export class SyncEngine {
 	): Promise<TFile> {
 		const { notes, settings } = this.deps;
 		const projectName = projectNames.get(task.projectId);
-		await notes.write(file, this.render(task, projectName));
+		await notes.write(file, this.render(task));
 
 		const desired = taskNotePath(task.title, {
 			taskFolder: this.folderFor(task),
@@ -464,17 +557,12 @@ export class SyncEngine {
 	}
 
 	/** Records the freshly assigned remote id into a locally authored note. */
-	private async stampNote(
-		file: TFile,
-		task: Task,
-		snapshot: TaskSnapshot,
-		projectName?: string,
-	): Promise<void> {
+	private async stampNote(file: TFile, task: Task, snapshot: TaskSnapshot): Promise<void> {
 		const merged: Task = { ...task, ...snapshot, id: task.id, projectId: task.projectId };
-		await this.deps.notes.write(file, this.render(merged, projectName));
+		await this.deps.notes.write(file, this.render(merged));
 	}
 
-	private render(task: Task, projectName?: string) {
+	private render(task: Task) {
 		const { settings } = this.deps;
 		return taskToNote(
 			task,
@@ -483,7 +571,7 @@ export class SyncEngine {
 				inlineTags: settings.inlineTags,
 				labels: settings.labels,
 			},
-			projectName,
+			this.links.contextFor(task),
 		);
 	}
 

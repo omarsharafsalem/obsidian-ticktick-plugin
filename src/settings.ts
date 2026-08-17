@@ -22,6 +22,8 @@ export interface PropertyNames {
 	reminders: string;
 	completed: string;
 	parent: string;
+	/** Links to the tasks whose parent is this one. Derived, never read back. */
+	children: string;
 }
 
 export const DEFAULT_PROPERTIES: PropertyNames = {
@@ -37,6 +39,7 @@ export const DEFAULT_PROPERTIES: PropertyNames = {
 	reminders: "reminders",
 	completed: "completed",
 	parent: "parent_task",
+	children: "child_tasks",
 };
 
 /**
@@ -57,6 +60,8 @@ export const PROPERTY_TYPES: Partial<Record<keyof PropertyNames, string>> = {
 	status: "multitext",
 	priority: "multitext",
 	project: "multitext",
+	parent: "text",
+	children: "multitext",
 };
 
 /**
@@ -130,6 +135,7 @@ export const DEFAULT_FIELD_MODES: FieldModes = {
 	repeatFlag: "both",
 	items: "both",
 	projectId: "both",
+	parentId: "both",
 };
 
 export type CompletedHandling = "keep" | "archive" | "delete";

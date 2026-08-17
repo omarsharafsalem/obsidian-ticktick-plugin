@@ -100,6 +100,7 @@ export const SYNCED_FIELDS = [
 	"repeatFlag",
 	"items",
 	"projectId",
+	"parentId",
 ] as const;
 
 export type SyncedField = (typeof SYNCED_FIELDS)[number];
