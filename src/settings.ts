@@ -283,6 +283,16 @@ export interface TickTickSyncSettings {
 	fieldModes: FieldModes;
 	registerPropertyTypes: boolean;
 
+	/**
+	 * Properties to hide from the Properties panel.
+	 *
+	 * The task id has to live in the note — it is what re-links a note to its
+	 * task after a state reset, and the only thing that survives a rename — but
+	 * it is machine bookkeeping and reads as clutter. Hiding is a display
+	 * concern, so it is solved with a style rule rather than by moving the data.
+	 */
+	hiddenProperties: string[];
+
 	/** Also read `#tags` written in the note body, not just the property. */
 	inlineTags: boolean;
 
@@ -356,6 +366,7 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	},
 	fieldModes: { ...DEFAULT_FIELD_MODES },
 	registerPropertyTypes: true,
+	hiddenProperties: ["ticktick_task_id"],
 	inlineTags: true,
 	conflictPolicy: "newest",
 	deleteConflictPolicy: "restore",
@@ -405,6 +416,7 @@ export function mergeSettings(stored: unknown): TickTickSyncSettings {
 		fieldModes: { ...DEFAULT_FIELD_MODES, ...(raw.fieldModes ?? {}) },
 		listFolders: { ...(raw.listFolders ?? {}) },
 		listPages: { ...(raw.listPages ?? {}) },
+		hiddenProperties: [...(raw.hiddenProperties ?? DEFAULT_SETTINGS.hiddenProperties)],
 		taskMarker: { ...DEFAULT_SETTINGS.taskMarker, ...(raw.taskMarker ?? {}) },
 		labels: {
 			status: {

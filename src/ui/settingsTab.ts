@@ -762,6 +762,22 @@ export class TickTickSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(root)
+			.setName("Hide these properties")
+			.setDesc(
+				"Hidden from the Properties panel, one per line. The task ID is hidden by default: it " +
+					"has to stay in the note — it is what re-links a note to its task after a reset — but " +
+					"it is machine bookkeeping, not something to read. The value is still in the file, " +
+					"visible in Source mode; this only stops it cluttering the panel.",
+			)
+			.addTextArea((text) => {
+				text.inputEl.rows = 3;
+				text.setValue(settings.hiddenProperties.join("\n")).onChange(async (value) => {
+					settings.hiddenProperties = splitLines(value);
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(root)
 			.setName("Register property types")
 			.setDesc(
 				"Tell Obsidian that dates are dates and tags are tags, so the Properties panel shows a " +

@@ -13,6 +13,7 @@ import { DEFAULT_SETTINGS, mergeSettings, type TickTickSyncSettings } from "./se
 import { SyncEngine, type SyncReport } from "./sync/engine";
 import { migrateState, SyncStore, type SyncState } from "./sync/state";
 import { NoteRepository, registerPropertyTypes } from "./vault/notes";
+import { applyHiddenProperties, removeHiddenProperties } from "./vault/hideProperties";
 import { TickTickSettingTab } from "./ui/settingsTab";
 import { ConfirmDeletionModal } from "./ui/authModal";
 
@@ -35,6 +36,8 @@ export default class TickTickSyncPlugin extends Plugin {
 		if (this.settings.registerPropertyTypes) {
 			registerPropertyTypes(this.app, this.settings.properties, this.settings.dateProperties);
 		}
+
+		applyHiddenProperties(this.settings.hiddenProperties);
 
 		this.statusBar = this.addStatusBarItem();
 		this.setStatus("idle");
@@ -78,6 +81,7 @@ export default class TickTickSyncPlugin extends Plugin {
 	}
 
 	onunload(): void {
+		removeHiddenProperties();
 		this.clearTimer();
 	}
 
@@ -99,6 +103,7 @@ export default class TickTickSyncPlugin extends Plugin {
 		if (this.settings.registerPropertyTypes) {
 			registerPropertyTypes(this.app, this.settings.properties, this.settings.dateProperties);
 		}
+		applyHiddenProperties(this.settings.hiddenProperties);
 		this.restartTimer();
 	}
 
