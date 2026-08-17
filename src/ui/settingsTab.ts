@@ -74,11 +74,20 @@ export class TickTickSettingTab extends PluginSettingTab {
 					"Treat it like a password — it grants access to your account.",
 			)
 			.addText((text) => {
+				const hadToken = settings.auth.personalToken !== "";
+
 				text.inputEl.type = "password";
 				text.setPlaceholder("Paste your API token");
 				text.setValue(settings.auth.personalToken).onChange(async (value) => {
 					settings.auth.personalToken = value.trim();
 					await this.plugin.saveSettings();
+				});
+
+				// Redraw once the field is done, so the OAuth fields below appear or
+				// disappear to match. Redrawing on every keystroke would steal focus
+				// mid-paste.
+				text.inputEl.addEventListener("blur", () => {
+					if ((settings.auth.personalToken !== "") !== hadToken) this.display();
 				});
 			})
 			.addExtraButton((button) =>
@@ -93,12 +102,12 @@ export class TickTickSettingTab extends PluginSettingTab {
 			);
 
 		if (settings.auth.personalToken) {
-			root.createEl("p", {
-				text:
-					"Using the personal API token. The app registration below is only needed for " +
-					"authorising other people's accounts — clear the token to use it instead.",
-				cls: "setting-item-description",
-			});
+			new Setting(root)
+				.setName("Connected")
+				.setDesc(
+					"Using your personal API token — there is nothing else to set up. Choose your lists " +
+						"below, then press Sync now. Clear the token above to use an app registration instead.",
+				);
 			return;
 		}
 
@@ -172,8 +181,18 @@ export class TickTickSettingTab extends PluginSettingTab {
 
 	private async connectOAuth(): Promise<void> {
 		const { settings } = this.plugin;
+
+		if (settings.auth.personalToken) {
+			new Notice("Already connected with your personal API token — nothing to authorise.");
+			return;
+		}
+
 		if (!settings.auth.clientId || !settings.auth.clientSecret) {
-			new Notice("Enter your TickTick client ID and secret first.");
+			new Notice(
+				"This button is for authorising an app registration. To connect your own account, " +
+					"paste a personal API token above instead.",
+				10_000,
+			);
 			return;
 		}
 
