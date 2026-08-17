@@ -96,6 +96,62 @@ describe("dates", () => {
 		expect(serialiseTask(task)["dueDate"]).toBe("2026-08-20T09:30:00.000+0000");
 	});
 
+	/**
+	 * The bug this guards: an all-day date was read off the UTC form, so a task
+	 * due the 20th at London midnight (23:00Z on the 19th) rendered as the 19th.
+	 */
+	it("keeps an all-day date on the right day east of Greenwich", () => {
+		const task = normaliseTask({
+			id: "t1",
+			isAllDay: true,
+			timeZone: "Europe/London",
+			dueDate: "2026-08-19T23:00:00.000+0000",
+		});
+
+		expect(task.dueDate?.slice(0, 10)).toBe("2026-08-20");
+	});
+
+	it("keeps an all-day date on the right day west of Greenwich", () => {
+		const task = normaliseTask({
+			id: "t1",
+			isAllDay: true,
+			timeZone: "America/Los_Angeles",
+			dueDate: "2026-08-20T07:00:00.000+0000",
+		});
+
+		expect(task.dueDate?.slice(0, 10)).toBe("2026-08-20");
+	});
+
+	it("round-trips an all-day date back to the same calendar day", () => {
+		for (const timeZone of ["Europe/London", "America/Los_Angeles", "Asia/Tokyo", "UTC"]) {
+			const original = normaliseTask({
+				id: "t1",
+				isAllDay: true,
+				timeZone,
+				dueDate: "2026-08-19T23:00:00.000+0000",
+			});
+
+			const sent = serialiseTask(original) as { dueDate?: string };
+			const returned = normaliseTask({ ...sent, id: "t1", isAllDay: true, timeZone });
+
+			expect({ timeZone, day: returned.dueDate?.slice(0, 10) }).toEqual({
+				timeZone,
+				day: original.dueDate?.slice(0, 10),
+			});
+		}
+	});
+
+	it("leaves a timed date as a true instant", () => {
+		const task = normaliseTask({
+			id: "t1",
+			isAllDay: false,
+			timeZone: "Europe/London",
+			dueDate: "2026-08-20T09:30:00.000+0000",
+		});
+
+		expect(task.dueDate).toBe("2026-08-20T09:30:00.000Z");
+	});
+
 	it("treats the epoch sentinel as no date", () => {
 		expect(normaliseTask({ id: "t1", dueDate: "1970-01-01T00:00:00.000+0000" }).dueDate).toBeUndefined();
 	});

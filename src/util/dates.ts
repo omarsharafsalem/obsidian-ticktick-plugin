@@ -30,6 +30,79 @@ export function toTickTickDate(iso: string | undefined): string | undefined {
 }
 
 /**
+ * The calendar date an instant falls on, as seen from `timeZone`.
+ *
+ * An all-day task is a *date*, but the wire carries an instant, and which date
+ * that instant belongs to depends on the task's own timezone. Reading the date
+ * off the UTC form instead — which this plugin used to do — shifts an all-day
+ * task to the previous day for anyone east of Greenwich.
+ *
+ * `en-CA` is used because it formats as `YYYY-MM-DD`.
+ */
+export function dateInZone(iso: string, timeZone?: string): string | undefined {
+	const parsed = new Date(iso);
+	if (Number.isNaN(parsed.getTime())) return undefined;
+
+	try {
+		return new Intl.DateTimeFormat("en-CA", {
+			timeZone: timeZone || "UTC",
+			year: "numeric",
+			month: "2-digit",
+			day: "2-digit",
+		}).format(parsed);
+	} catch {
+		// An unknown zone should not lose the date entirely.
+		return parsed.toISOString().slice(0, 10);
+	}
+}
+
+/** How far `timeZone` is from UTC at a given instant, in milliseconds. */
+function zoneOffsetMs(at: Date, timeZone: string): number {
+	const parts = new Intl.DateTimeFormat("en-US", {
+		timeZone,
+		hour12: false,
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+	}).formatToParts(at);
+
+	const field = (type: string): number =>
+		Number(parts.find((part) => part.type === type)?.value ?? "0");
+
+	// `hour` comes back as 24 at midnight under hour12: false in some engines.
+	const hour = field("hour") % 24;
+	const asUtc = Date.UTC(field("year"), field("month") - 1, field("day"), hour, field("minute"), field("second"));
+
+	return asUtc - at.getTime();
+}
+
+/**
+ * The instant at which a bare `YYYY-MM-DD` begins in `timeZone`.
+ *
+ * The inverse of {@link dateInZone}, so an all-day task survives the round trip
+ * to TickTick and back on the same calendar day.
+ */
+export function zonedMidnight(dateOnly: string, timeZone?: string): string | undefined {
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) return undefined;
+
+	const utcMidnight = new Date(`${dateOnly}T00:00:00.000Z`);
+	if (Number.isNaN(utcMidnight.getTime())) return undefined;
+	if (!timeZone) return utcMidnight.toISOString();
+
+	try {
+		// Offsets are themselves date-dependent, so apply and re-measure once —
+		// enough to settle any DST boundary the first guess landed the wrong side of.
+		const firstPass = new Date(utcMidnight.getTime() - zoneOffsetMs(utcMidnight, timeZone));
+		return new Date(utcMidnight.getTime() - zoneOffsetMs(firstPass, timeZone)).toISOString();
+	} catch {
+		return utcMidnight.toISOString();
+	}
+}
+
+/**
  * Renders a date for storage in note frontmatter. All-day tasks get a bare
  * `YYYY-MM-DD` so that Obsidian's date pickers and Dataview treat them as
  * dates rather than instants.

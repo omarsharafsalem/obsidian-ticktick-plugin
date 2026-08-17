@@ -1,4 +1,4 @@
-import { fromTickTickDate, toTickTickDate } from "../util/dates";
+import { dateInZone, fromTickTickDate, toTickTickDate, zonedMidnight } from "../util/dates";
 import { ApiError, HttpQueue } from "./http";
 import type { Capabilities, TickTickClient } from "./client";
 import {
@@ -54,6 +54,30 @@ export function normaliseChecklistItem(raw: unknown): ChecklistItem {
 	};
 }
 
+/**
+ * All-day dates are pinned to UTC midnight of the calendar date they fall on in
+ * the task's *own* timezone. That way everything above this boundary can treat
+ * an all-day date as a plain date, and only this file needs to know about zones.
+ */
+function normaliseTaskDate(raw: unknown, isAllDay: boolean, timeZone?: string): string | undefined {
+	const iso = fromTickTickDate(raw);
+	if (!iso || !isAllDay) return iso;
+
+	const date = dateInZone(iso, timeZone);
+	return date ? `${date}T00:00:00.000Z` : iso;
+}
+
+/** Sends an all-day date as the moment that day begins where the task lives. */
+function serialiseTaskDate(
+	iso: string | undefined,
+	isAllDay: boolean,
+	timeZone?: string,
+): string | undefined {
+	if (!iso) return undefined;
+	if (!isAllDay) return toTickTickDate(iso);
+	return toTickTickDate(zonedMidnight(iso.slice(0, 10), timeZone) ?? iso);
+}
+
 function asKind(value: unknown): TaskKind | undefined {
 	return value === "TEXT" || value === "CHECKLIST" || value === "NOTE" ? value : undefined;
 }
@@ -80,8 +104,8 @@ export function normaliseTask(raw: unknown): Task {
 		status: statusFromWire(task["status"]),
 		priority: priorityFromWire(task["priority"]),
 		tags: asArray(task["tags"]).filter((t): t is string => typeof t === "string"),
-		dueDate: fromTickTickDate(task["dueDate"]),
-		startDate: fromTickTickDate(task["startDate"]),
+		dueDate: normaliseTaskDate(task["dueDate"], isAllDay, asString(task["timeZone"])),
+		startDate: normaliseTaskDate(task["startDate"], isAllDay, asString(task["timeZone"])),
 		isAllDay,
 		timeZone: asString(task["timeZone"]),
 		reminders: asArray(task["reminders"]).filter((r): r is string => typeof r === "string"),
@@ -137,9 +161,9 @@ export function serialiseTask(task: NewTask & { id?: string }): Json {
 	if (task.timeZone) body["timeZone"] = task.timeZone;
 	if (task.sortOrder !== undefined) body["sortOrder"] = task.sortOrder;
 
-	const due = toTickTickDate(task.dueDate);
+	const due = serialiseTaskDate(task.dueDate, task.isAllDay, task.timeZone);
 	if (due) body["dueDate"] = due;
-	const start = toTickTickDate(task.startDate);
+	const start = serialiseTaskDate(task.startDate, task.isAllDay, task.timeZone);
 	if (start) body["startDate"] = start;
 
 	if (task.items.length > 0) {
