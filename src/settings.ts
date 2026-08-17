@@ -248,6 +248,16 @@ export interface TickTickSyncSettings {
 	listPages: Record<string, string>;
 
 	/**
+	 * Most new TickTick tasks one sync may create before it stops.
+	 *
+	 * Creating a task is the only operation that multiplies: a note that fails to
+	 * match an existing task looks new, so one bad match rule turns every note in
+	 * the vault into a duplicate. A cap turns that into a message instead of
+	 * hundreds of tasks. Zero disables the limit.
+	 */
+	maxNewTasksPerSync: number;
+
+	/**
 	 * Pull tasks that are already completed in TickTick.
 	 *
 	 * Off by default: it creates a note for everything finished in the last 90
@@ -305,6 +315,7 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	syncedRegionMarker: "<!-- ticktick:end -->",
 	linkBackToNote: true,
 	dateProperties: "datetime",
+	maxNewTasksPerSync: 20,
 	syncCompletedTasks: false,
 	properties: { ...DEFAULT_PROPERTIES },
 	labels: {

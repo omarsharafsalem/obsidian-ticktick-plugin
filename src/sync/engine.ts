@@ -604,6 +604,29 @@ export class SyncEngine {
 		const { client, store, settings } = this.deps;
 		const inbox = settings.projectFilter[0] ?? [...projectNames.keys()][0];
 
+		const candidates = local.filter(
+			(note) => !note.taskId && !store.getByPath(note.file.path),
+		);
+		const cap = settings.maxNewTasksPerSync;
+
+		// Creating tasks is the one operation that multiplies. If a match rule
+		// breaks, every note looks new — so refuse the whole batch rather than
+		// fill TickTick with duplicates that then have to be found by hand.
+		if (cap > 0 && candidates.length > cap) {
+			report.errors.push(
+				`${candidates.length} notes look like new tasks, which is more than the limit of ${cap}. ` +
+					"No tasks were created. This usually means notes stopped matching their existing " +
+					"tasks rather than that they are genuinely new — check a note still has its task ID " +
+					"property, and use Preview changes to see the full list.",
+			);
+			this.deps.log("Refused to create tasks", {
+				candidates: candidates.length,
+				cap,
+				examples: candidates.slice(0, 10).map((note) => note.file.path),
+			});
+			return;
+		}
+
 		for (const note of local) {
 			if (note.taskId) continue;
 			// Skip anything the store already knows by path — it is mid-link.

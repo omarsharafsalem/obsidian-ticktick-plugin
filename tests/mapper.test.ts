@@ -815,3 +815,39 @@ describe("sanitiseFilename", () => {
 		expect(sanitiseFilename("///")).toBe("Untitled task");
 	});
 });
+
+/**
+ * Renaming a default property silently orphans every note carrying the old
+ * name: the note reads as having no task id, looks new, and a duplicate task
+ * gets created in TickTick. This is what that looked like in practice.
+ */
+describe("property names from earlier versions", () => {
+	it("still finds a task id written as ticktick_id", () => {
+		const parsed = noteToTask(
+			{ frontmatter: { ticktick_id: "6a82dd125f3251294a7e1c57" }, body: "" },
+			"Buy milk",
+			options,
+		);
+
+		expect(parsed.id).toBe("6a82dd125f3251294a7e1c57");
+	});
+
+	it("still finds a list written as list", () => {
+		const parsed = noteToTask({ frontmatter: { list: "Errands" }, body: "" }, "Buy milk", {
+			...options,
+			resolveProject: (name) => (name === "Errands" ? "p1" : undefined),
+		});
+
+		expect(parsed.projectId).toBe("p1");
+	});
+
+	it("prefers the configured name when both are present", () => {
+		const parsed = noteToTask(
+			{ frontmatter: { ticktick_task_id: "new", ticktick_id: "old" }, body: "" },
+			"Buy milk",
+			options,
+		);
+
+		expect(parsed.id).toBe("new");
+	});
+});

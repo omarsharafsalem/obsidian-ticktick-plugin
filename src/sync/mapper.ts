@@ -79,6 +79,35 @@ export function parseWikilink(value: string): string | undefined {
 	return (match[1].split("|")[0] ?? "").trim() || undefined;
 }
 
+/**
+ * Property names this plugin used to write, still read as a fallback.
+ *
+ * Renaming a default silently orphans every note carrying the old name: the
+ * note reads as having no task id, so it looks new and a duplicate task gets
+ * created in TickTick. Reading the old names costs nothing and prevents that.
+ */
+const LEGACY_PROPERTY_NAMES: Partial<Record<keyof PropertyNames, string[]>> = {
+	id: ["ticktick_id"],
+	project: ["list"],
+};
+
+/** The configured property, falling back to names earlier versions wrote. */
+function readProperty(
+	fm: Record<string, unknown>,
+	properties: PropertyNames,
+	key: keyof PropertyNames,
+): unknown {
+	const configured = fm[properties[key]];
+	if (configured !== undefined && configured !== null) return configured;
+
+	for (const legacy of LEGACY_PROPERTY_NAMES[key] ?? []) {
+		const value = fm[legacy];
+		if (value !== undefined && value !== null) return value;
+	}
+
+	return undefined;
+}
+
 /** Characters Obsidian or the filesystem will not accept in a note name. */
 const ILLEGAL_FILENAME_CHARS = /[\\/:*?"<>|#^[\]]/g;
 
@@ -546,7 +575,7 @@ export function noteToTask(
 	// resolved back to an id. A plain value that resolves to nothing is passed
 	// through — it may already be an id — but an unresolved *link* is not, since
 	// a note title is never a list id and guessing would move the task.
-	const projectRef = readString(fm[p.project]);
+	const projectRef = readString(readProperty(fm, p, "project"));
 	const projectTarget = projectRef ? parseWikilink(projectRef) : undefined;
 	const projectId = projectRef
 		? projectTarget !== undefined
@@ -558,7 +587,7 @@ export function noteToTask(
 	const statusNeutral = typeof statusRaw === "string" && isNeutralStatus(statusRaw, labels);
 
 	return {
-		id: readString(fm[p.id]),
+		id: readString(readProperty(fm, p, "id")),
 		projectId,
 		statusNeutral,
 		privateBody,

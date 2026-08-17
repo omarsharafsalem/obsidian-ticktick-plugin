@@ -442,6 +442,23 @@ export class TickTickSettingTab extends PluginSettingTab {
 		);
 
 		new Setting(root)
+			.setName("Stop if more than this many new tasks")
+			.setDesc(
+				"Creating tasks is the only thing a sync does that multiplies — a note that stops " +
+					"matching its task looks new, so one bad match turns every note into a duplicate. " +
+					"Above this count nothing is created and the sync says so instead. 0 removes the limit.",
+			)
+			.addText((text) =>
+				text.setValue(String(settings.maxNewTasksPerSync)).onChange(async (value) => {
+					const limit = Number.parseInt(value, 10);
+					if (Number.isFinite(limit) && limit >= 0) {
+						settings.maxNewTasksPerSync = limit;
+						await this.plugin.saveSettings();
+					}
+				}),
+			);
+
+		new Setting(root)
 			.setName("Pull tasks already completed")
 			.setDesc(
 				"Off by default. When on, the first sync creates a note for everything completed in the " +
