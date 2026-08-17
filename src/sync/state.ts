@@ -16,6 +16,14 @@ export interface SyncEntry {
 	projectId: string;
 	/** Vault-relative path of the note representing this task. */
 	notePath: string;
+	/**
+	 * Consecutive syncs in which this task's note was not found.
+	 *
+	 * Reset the moment the note turns up. Deleting a task requires this to have
+	 * risen above the configured threshold, so a single missed pass -- a failed
+	 * read, a rule mid-change -- can never destroy anything.
+	 */
+	missingPasses?: number;
 	/** State both sides agreed on at the end of the last sync. */
 	base: TaskSnapshot;
 	/** Note mtime when we last wrote or read it, for conflict tie-breaks. */

@@ -835,6 +835,43 @@ export class TickTickSettingTab extends PluginSettingTab {
 		root.createEl("h2", { text: "Conflicts" });
 
 		new Setting(root)
+			.setName("When a note is missing")
+			.setDesc(
+				"A note can be missing because you deleted it — or because its task ID property was " +
+					"renamed, a marker rule changed, a folder moved, or a read failed. All of those look " +
+					"identical from here, and only one of them means delete. Keeping the task is the " +
+					"default: the note is simply written again, which costs nothing if it was a mistake.",
+			)
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions({
+						keepTask: "Keep the task and restore the note",
+						deleteTask: "Delete the task in TickTick",
+					})
+					.setValue(settings.noteDeletion)
+					.onChange(async (value) => {
+						settings.noteDeletion = value as typeof settings.noteDeletion;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(root)
+			.setName("Syncs a note must be missing before deleting its task")
+			.setDesc(
+				"Only used when the setting above deletes. One pass proves nothing — requiring the same " +
+					"answer twice turns a transient miss into a no-op rather than a deletion.",
+			)
+			.addText((text) =>
+				text.setValue(String(settings.passesBeforeDeletingTask)).onChange(async (value) => {
+					const passes = Number.parseInt(value, 10);
+					if (Number.isFinite(passes) && passes >= 1) {
+						settings.passesBeforeDeletingTask = passes;
+						await this.plugin.saveSettings();
+					}
+				}),
+			);
+
+		new Setting(root)
 			.setName("When a task is deleted in TickTick")
 			.setDesc(
 				"Clearing out finished tasks in TickTick is housekeeping, and the note is often the only " +

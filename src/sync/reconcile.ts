@@ -33,11 +33,31 @@ export type DeleteConflictPolicy = "restore" | "propagateDelete";
  */
 export type RemoteDeletionPolicy = "keepNote" | "deleteNote";
 
+/**
+ * What happens to a TickTick task when its note is missing.
+ *
+ * "keepTask" is the default and means the plugin never deletes in TickTick.
+ * A note can be missing for many reasons that are not deletion — an unmatched
+ * id, a marker rule, a moved folder, a failed read — and every one of them
+ * looks the same from here. Recreating a note is free; recreating a task and
+ * its history is not.
+ */
+export type NoteDeletionPolicy = "keepTask" | "deleteTask";
+
 export interface ReconcileOptions {
 	conflictPolicy: ConflictPolicy;
 	deleteConflictPolicy: DeleteConflictPolicy;
 	/** What to do with the note when its task disappears from TickTick. */
 	remoteDeletion: RemoteDeletionPolicy;
+	/** What to do with the task when its note is missing. */
+	noteDeletion: NoteDeletionPolicy;
+	/**
+	 * Whether the note's absence has actually been established.
+	 *
+	 * False means "not seen this pass", which is not evidence of anything. Only
+	 * a note confirmed gone — across more than one pass — may delete a task.
+	 */
+	noteConfirmedGone?: boolean;
 	/** Epoch ms of the note's last modification, when known. */
 	localModifiedAt?: number;
 	/** Epoch ms of the remote task's last modification, when known. */
@@ -275,7 +295,16 @@ export function reconcile(input: ReconcileInput, options: ReconcileOptions): Syn
 			: { kind: "restoreRemote", snapshot: local };
 	}
 
-	// remote && !local — the note was deleted.
+	// remote && !local — the note is missing.
+	//
+	// Restoring it is the safe reading and the default: the task still exists,
+	// so the note can simply be written again. Deleting the task is only
+	// considered when asked for, and then only once the note has actually been
+	// established as gone rather than merely absent from one pass.
+	if (options.noteDeletion !== "deleteTask" || !options.noteConfirmedGone) {
+		return { kind: "restoreLocal", snapshot: remote! };
+	}
+
 	if (snapshotsEqual(remote!, base)) return { kind: "deleteRemote" };
 	return options.deleteConflictPolicy === "propagateDelete"
 		? { kind: "deleteRemote" }

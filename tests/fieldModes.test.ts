@@ -12,6 +12,8 @@ const options: ReconcileOptions = {
 	conflictPolicy: "newest",
 	deleteConflictPolicy: "restore",
 	remoteDeletion: "deleteNote",
+	noteDeletion: "deleteTask",
+	noteConfirmedGone: true,
 };
 
 function modes(overrides: Partial<FieldModes>): FieldModes {

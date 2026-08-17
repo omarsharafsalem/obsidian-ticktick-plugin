@@ -422,6 +422,15 @@ export class SyncEngine {
 		const localNote = localById.get(taskId);
 		let remoteRecord = remote.get(taskId);
 
+		// Count consecutive passes in which the note has not turned up, and reset
+		// the moment it does. This is what "confirmed gone" is measured against.
+		if (entry) {
+			const missing = localNote ? 0 : (entry.missingPasses ?? 0) + 1;
+			if (missing !== (entry.missingPasses ?? 0)) {
+				store.set({ ...entry, missingPasses: missing });
+			}
+		}
+
 		// A note that was not found this pass is not the same thing as a note the
 		// user deleted, and only the second should ever delete a TickTick task.
 		// If the file is still on disk it simply was not discovered — a renamed
@@ -464,6 +473,9 @@ export class SyncEngine {
 				conflictPolicy: settings.conflictPolicy,
 				deleteConflictPolicy: settings.deleteConflictPolicy,
 				remoteDeletion: settings.remoteDeletion,
+				noteDeletion: settings.noteDeletion,
+				noteConfirmedGone:
+					(store.get(taskId)?.missingPasses ?? 0) >= settings.passesBeforeDeletingTask,
 				baseFields: masked?.baseFields,
 				localModifiedAt: localNote?.mtime,
 				remoteModifiedAt: remoteRecord?.task.modifiedTime

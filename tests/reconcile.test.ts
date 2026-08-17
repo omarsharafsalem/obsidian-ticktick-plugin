@@ -21,6 +21,8 @@ const options: ReconcileOptions = {
 	conflictPolicy: "newest",
 	deleteConflictPolicy: "restore",
 	remoteDeletion: "deleteNote",
+	noteDeletion: "deleteTask",
+	noteConfirmedGone: true,
 };
 
 describe("reconcile — creation", () => {
@@ -209,6 +211,43 @@ describe("reconcile — deletion", () => {
 
 		// Deleting the note is still the user asking for the task to go.
 		expect(reconcile({ base, remote: snap() }, keep).kind).toBe("deleteRemote");
+	});
+
+	/**
+	 * The default, and the important one. A note can be missing because its id
+	 * property was renamed, a marker rule changed, a folder moved or a read
+	 * failed — none of which are deletion, and all of which look identical from
+	 * here. Recreating a note is free; recreating a task is not.
+	 */
+	it("never deletes a task by default — it restores the note instead", () => {
+		const safe: ReconcileOptions = { ...options, noteDeletion: "keepTask" };
+		const base = snap();
+
+		expect(reconcile({ base, remote: snap() }, safe).kind).toBe("restoreLocal");
+	});
+
+	it("does not delete even when asked to, until the note is confirmed gone", () => {
+		const unconfirmed: ReconcileOptions = { ...options, noteConfirmedGone: false };
+		const base = snap();
+
+		expect(reconcile({ base, remote: snap() }, unconfirmed).kind).toBe("restoreLocal");
+	});
+
+	it("deletes only once asked to and confirmed", () => {
+		const confirmed: ReconcileOptions = {
+			...options,
+			noteDeletion: "deleteTask",
+			noteConfirmedGone: true,
+		};
+
+		expect(reconcile({ base: snap(), remote: snap() }, confirmed).kind).toBe("deleteRemote");
+	});
+
+	it("keeping the task does not stop a note being deleted for a gone task", () => {
+		const safe: ReconcileOptions = { ...options, noteDeletion: "keepTask" };
+
+		// The two directions are independent: this one is still TickTick's call.
+		expect(reconcile({ base: snap(), local: snap() }, safe).kind).toBe("deleteLocal");
 	});
 
 	/**

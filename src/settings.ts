@@ -2,6 +2,7 @@ import type { Priority, SyncedField, TaskStatus } from "./api/types";
 import type {
 	ConflictPolicy,
 	DeleteConflictPolicy,
+	NoteDeletionPolicy,
 	RemoteDeletionPolicy,
 } from "./sync/reconcile";
 import type { OAuthTokens } from "./auth/oauth";
@@ -290,6 +291,23 @@ export interface TickTickSyncSettings {
 	/** What happens to a note when its task is deleted in TickTick. */
 	remoteDeletion: RemoteDeletionPolicy;
 
+	/**
+	 * What happens to a TickTick task when its note is missing.
+	 *
+	 * Defaults to keeping the task. Deleting is the only irreversible thing this
+	 * plugin does, and its trigger is ambiguous by nature.
+	 */
+	noteDeletion: NoteDeletionPolicy;
+
+	/**
+	 * Syncs a note must be missing for before its task may be deleted.
+	 *
+	 * One pass proves nothing — a read can fail, a rule can change. Requiring the
+	 * same answer twice turns a transient miss into a no-op instead of a
+	 * deletion. Only used when {@link noteDeletion} is "deleteTask".
+	 */
+	passesBeforeDeletingTask: number;
+
 	completedHandling: CompletedHandling;
 	archiveFolder: string;
 
@@ -333,6 +351,8 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	conflictPolicy: "newest",
 	deleteConflictPolicy: "restore",
 	remoteDeletion: "keepNote",
+	noteDeletion: "keepTask",
+	passesBeforeDeletingTask: 2,
 	completedHandling: "keep",
 	archiveFolder: "Tasks/Archive",
 	debugLogging: false,
