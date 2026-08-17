@@ -459,6 +459,23 @@ export class TickTickSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(root)
+			.setName("Stop if more than this many tasks would be deleted")
+			.setDesc(
+				"A task is deleted in TickTick when its note is gone — but a note that simply was not " +
+					"recognised looks identical. Deleting cannot be undone from here, so past this count " +
+					"nothing is deleted and the sync says why. 0 removes the limit.",
+			)
+			.addText((text) =>
+				text.setValue(String(settings.maxDeletedTasksPerSync)).onChange(async (value) => {
+					const limit = Number.parseInt(value, 10);
+					if (Number.isFinite(limit) && limit >= 0) {
+						settings.maxDeletedTasksPerSync = limit;
+						await this.plugin.saveSettings();
+					}
+				}),
+			);
+
+		new Setting(root)
 			.setName("Pull tasks already completed")
 			.setDesc(
 				"Off by default. When on, the first sync creates a note for everything completed in the " +

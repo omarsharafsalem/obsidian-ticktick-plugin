@@ -414,13 +414,30 @@ export class SyncEngine {
 		report: SyncReport;
 	}): Promise<void> {
 		const { taskId, remote, localById, projectNames, report } = context;
-		const { store, settings } = this.deps;
+		const { store, settings, notes } = this.deps;
 
 		if (store.isTombstoned(taskId)) return;
 
 		const entry = store.get(taskId);
 		const localNote = localById.get(taskId);
 		let remoteRecord = remote.get(taskId);
+
+		// A note that was not found this pass is not the same thing as a note the
+		// user deleted, and only the second should ever delete a TickTick task.
+		// If the file is still on disk it simply was not discovered — a renamed
+		// property, a marker rule, a changed folder — so the safe reading is that
+		// nothing happened. Acting on the difference deletes real tasks.
+		if (!localNote && entry?.notePath && notes.getFile(entry.notePath)) {
+			this.deps.log("Note exists but was not discovered; leaving its task alone", {
+				taskId,
+				notePath: entry.notePath,
+			});
+			report.errors.push(
+				`${entry.notePath} still exists but was not recognised as a task, so its TickTick task ` +
+					"was left untouched. Check the task ID property and the task marker.",
+			);
+			return;
+		}
 
 		// A tracked task missing from the listing is either completed or deleted.
 		// Only a direct fetch can tell them apart on the official API.
@@ -584,6 +601,19 @@ export class SyncEngine {
 			}
 
 			case "deleteRemote": {
+				// Deleting is irreversible from here. One sync should never take out
+				// a whole list, and a rule that stops notes matching would do exactly
+				// that, so past the limit nothing goes and the sync says why.
+				const cap = settings.maxDeletedTasksPerSync;
+				if (cap > 0 && report.deletedRemote >= cap) {
+					report.errors.push(
+						`Stopped after deleting ${cap} TickTick tasks in one sync. The rest were left ` +
+							"alone. This usually means notes stopped matching their tasks rather than that " +
+							"you deleted them — use Preview changes to see what is happening.",
+					);
+					return;
+				}
+
 				if (entry) {
 					await client.deleteTask(entry.projectId, taskId);
 					report.deletedRemote++;

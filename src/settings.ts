@@ -27,13 +27,6 @@ export interface PropertyNames {
 	parent: string;
 	/** Links to the tasks whose parent is this one. Derived, never read back. */
 	children: string;
-	/**
-	 * Whether the task is all-day rather than scheduled at a time.
-	 *
-	 * Explicit rather than inferred from the date's shape: once `due` is
-	 * registered as a datetime, Obsidian normalises a bare `2026-08-20` to
-	 * include a time, and every all-day task would silently become timed.
-	 */
 }
 
 export const DEFAULT_PROPERTIES: PropertyNames = {
@@ -258,6 +251,15 @@ export interface TickTickSyncSettings {
 	maxNewTasksPerSync: number;
 
 	/**
+	 * Most TickTick tasks one sync may delete before it stops.
+	 *
+	 * Deleting cannot be undone from here, and the trigger is a note being
+	 * absent — which a discovery rule can cause for every note at once. The cap
+	 * bounds the damage to something recoverable. Zero disables the limit.
+	 */
+	maxDeletedTasksPerSync: number;
+
+	/**
 	 * Pull tasks that are already completed in TickTick.
 	 *
 	 * Off by default: it creates a note for everything finished in the last 90
@@ -316,6 +318,7 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	linkBackToNote: true,
 	dateProperties: "datetime",
 	maxNewTasksPerSync: 20,
+	maxDeletedTasksPerSync: 10,
 	syncCompletedTasks: false,
 	properties: { ...DEFAULT_PROPERTIES },
 	labels: {
