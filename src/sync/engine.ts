@@ -101,6 +101,9 @@ interface TaskLinkIndex {
 	resolveTaskLink: (target: string) => string | undefined;
 }
 
+/** What a direct fetch could establish about a task that left the listing. */
+type ProbeResult = { state: "present"; task: Task } | { state: "gone" } | { state: "unknown" };
+
 const NO_LINKS: TaskLinkIndex = {
 	contextFor: () => ({}),
 	resolveTaskLink: () => undefined,
@@ -493,7 +496,20 @@ export class SyncEngine {
 		// Only a direct fetch can tell them apart on the official API.
 		if (!remoteRecord && entry) {
 			const probed = await this.probeRemote(entry);
-			if (probed) remoteRecord = { task: probed, snapshot: toSnapshot(probed) };
+
+			// Unknown is not "gone" and not "still there". Skipping is the only
+			// answer that cannot invent a task or destroy one.
+			if (probed.state === "unknown") {
+				report.errors.push(
+					`Could not check whether "${entry.notePath}" still exists in TickTick, so it was ` +
+						"left untouched. Nothing was created, changed or deleted for it.",
+				);
+				return;
+			}
+
+			if (probed.state === "present") {
+				remoteRecord = { task: probed.task, snapshot: toSnapshot(probed.task) };
+			}
 		}
 
 		const base = entry?.base;
@@ -537,14 +553,28 @@ export class SyncEngine {
 		});
 	}
 
-	private async probeRemote(entry: SyncEntry): Promise<Task | null> {
+	/**
+	 * Asks TickTick directly whether a task that left the listing still exists.
+	 *
+	 * Three answers, and the third one matters: a failed probe means *unknown*,
+	 * not present. This used to invent a task from the last-agreed state so that
+	 * a transient failure could not delete a note — but an invented task looks
+	 * exactly like a real one, so a task deleted in TickTick was resurrected on
+	 * every sync, and each resurrection wrote another copy of the note.
+	 *
+	 * Doing nothing is the only safe answer to a question that did not get one.
+	 */
+	private async probeRemote(entry: SyncEntry): Promise<ProbeResult> {
 		try {
-			return await this.deps.client.getTask(entry.projectId, entry.taskId);
+			const task = await this.deps.client.getTask(entry.projectId, entry.taskId);
+			return task ? { state: "present", task } : { state: "gone" };
 		} catch (error) {
-			// Treat an unreadable task as still present, so a transient failure
-			// never deletes a note.
-			this.deps.log(`Probe failed for ${entry.taskId}`, error);
-			return { ...blankTask(entry.projectId), id: entry.taskId, ...entry.base } as Task;
+			this.deps.log("Probe failed; leaving this task alone", {
+				taskId: entry.taskId,
+				projectId: entry.projectId,
+				error: describeError(error),
+			});
+			return { state: "unknown" };
 		}
 	}
 
@@ -581,7 +611,9 @@ export class SyncEngine {
 			case "createLocal":
 			case "restoreLocal": {
 				if (!remoteRecord) return;
-				const file = await this.writeNewNote(remoteRecord.task, projectNames);
+				// Restoring reclaims the path the note had. Computing a fresh one
+				// would collide with anything still there and add " 2" every time.
+				const file = await this.writeNewNote(remoteRecord.task, projectNames, entry?.notePath);
 				store.set(this.entryFor(remoteRecord.task, file.path, action.snapshot, file.stat.mtime));
 				report.createdLocal++;
 				return;
@@ -800,9 +832,20 @@ export class SyncEngine {
 		}
 	}
 
-	private async writeNewNote(task: Task, projectNames: Map<string, string>): Promise<TFile> {
+	private async writeNewNote(
+		task: Task,
+		projectNames: Map<string, string>,
+		preferredPath?: string,
+	): Promise<TFile> {
 		const { notes, settings } = this.deps;
 		const projectName = projectNames.get(task.projectId);
+
+		// A note being restored goes back where it was, provided nothing has
+		// taken the name since.
+		if (preferredPath && !notes.getFile(preferredPath)) {
+			return notes.create(preferredPath, this.render(task));
+		}
+
 		const path = taskNotePath(task.title, {
 			taskFolder: this.folderFor(task),
 			projectName,
