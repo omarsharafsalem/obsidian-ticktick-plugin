@@ -2,7 +2,6 @@ import { Notice, Plugin, TFile, debounce } from "obsidian";
 import { HttpQueue } from "./api/http";
 import type { TickTickClient } from "./api/client";
 import { OpenApiClient } from "./api/openApi";
-import { V2Client } from "./api/v2";
 import {
 	buildAuthorizeUrl,
 	loopbackRedirectUri,
@@ -105,7 +104,6 @@ export default class TickTickSyncPlugin extends Plugin {
 	// --- Client wiring ------------------------------------------------------
 
 	isConnected(): boolean {
-		if (this.settings.advancedMode) return this.settings.v2Session !== null;
 		return this.settings.auth.personalToken !== "" || this.settings.auth.tokens !== null;
 	}
 
@@ -141,18 +139,6 @@ export default class TickTickSyncPlugin extends Plugin {
 	}
 
 	createClient(): TickTickClient {
-		if (this.settings.advancedMode) {
-			return new V2Client({
-				queue: this.queue,
-				getSession: () => this.settings.v2Session,
-				setSession: async (session) => {
-					this.settings.v2Session = session;
-					await this.persist();
-				},
-				onAuthFailure: () => new Notice("TickTick session expired. Sign in again in settings."),
-			});
-		}
-
 		return new OpenApiClient({
 			queue: this.queue,
 			getAccessToken: () => this.accessToken(),

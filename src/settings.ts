@@ -1,7 +1,6 @@
 import type { SyncedField } from "./api/types";
 import type { ConflictPolicy, DeleteConflictPolicy } from "./sync/reconcile";
 import type { OAuthTokens } from "./auth/oauth";
-import type { V2Session } from "./api/v2";
 
 /**
  * Names of the Obsidian properties each TickTick field maps onto.
@@ -96,10 +95,6 @@ export interface AuthSettings {
 export interface TickTickSyncSettings {
 	auth: AuthSettings;
 
-	/** Opt-in to the unofficial v2 API. See README for the trade-offs. */
-	advancedMode: boolean;
-	v2Session: V2Session | null;
-
 	/** Vault folder that holds task notes. */
 	taskFolder: string;
 	/** Create a subfolder per TickTick list. */
@@ -134,8 +129,6 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 		tokens: null,
 		loopbackPort: 8484,
 	},
-	advancedMode: false,
-	v2Session: null,
 	taskFolder: "Tasks",
 	folderPerProject: true,
 	syncIntervalMinutes: 5,

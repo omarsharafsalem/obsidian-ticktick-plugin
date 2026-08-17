@@ -1,9 +1,9 @@
 /**
  * The canonical task shape used everywhere inside this plugin.
  *
- * Neither the official Open API nor the unofficial v2 API is used directly by
- * the sync engine — both are normalised into this model first, so that the
- * reconciliation logic never has to care which backend produced a record.
+ * The Open API is not used directly by the sync engine — responses are
+ * normalised into this model first, so the reconciliation logic never has to
+ * care about wire format.
  */
 
 export type Priority = "none" | "low" | "medium" | "high";

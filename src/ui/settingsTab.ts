@@ -1,12 +1,10 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type TickTickSyncPlugin from "../main";
 import { SYNCED_FIELDS, type Project, type SyncedField } from "../api/types";
-import { ApiError } from "../api/http";
-import { v2SignOn } from "../api/v2";
 import { awaitLoopbackCode, exchangeAuthCode, extractAuthCode, randomState } from "../auth/oauth";
 import { DEFAULT_PROPERTIES, type FieldSyncMode, type PropertyNames } from "../settings";
 import { emptyState, SyncStore } from "../sync/state";
-import { PasteCodeModal, V2LoginModal } from "./authModal";
+import { PasteCodeModal } from "./authModal";
 
 const FIELD_LABELS: Record<SyncedField, string> = {
 	title: "Title",
@@ -39,26 +37,6 @@ const PROPERTY_LABELS: Record<keyof PropertyNames, string> = {
 	parent: "Parent task",
 };
 
-/**
- * Turns a sign-on failure into something actionable. TickTick reports both a
- * wrong password and a lockout as HTTP 500, so the raw message is a wall of
- * JSON that does not say what to do next.
- */
-function signInFailureMessage(error: unknown): string {
-	if (error instanceof ApiError && error.isLockout) {
-		return (
-			"TickTick has temporarily blocked sign-in after too many failed attempts. " +
-			"Wait before trying again, and check the password by signing in at ticktick.com first."
-		);
-	}
-
-	if (error instanceof ApiError && error.isCredentialFailure) {
-		return "TickTick rejected that email or password. Check them at ticktick.com, then try again.";
-	}
-
-	return `Sign-in failed: ${error instanceof Error ? error.message : String(error)}`;
-}
-
 export class TickTickSettingTab extends PluginSettingTab {
 	/** Lists fetched from TickTick, cached so the tab can redraw without refetching. */
 	private projects: Project[] | null = null;
@@ -87,27 +65,6 @@ export class TickTickSettingTab extends PluginSettingTab {
 	private renderConnection(root: HTMLElement): void {
 		const { settings } = this.plugin;
 		root.createEl("h2", { text: "Connection" });
-
-		new Setting(root)
-			.setName("Advanced mode (unofficial API)")
-			.setDesc(
-				"Uses TickTick's internal API instead of the official one. Unlocks tags, completed-task " +
-					"history and per-task modification times, which make conflict resolution and deletion " +
-					"detection far more precise. It is not covered by TickTick's developer terms and can " +
-					"break without notice.",
-			)
-			.addToggle((toggle) =>
-				toggle.setValue(settings.advancedMode).onChange(async (value) => {
-					settings.advancedMode = value;
-					await this.plugin.saveSettings();
-					this.display();
-				}),
-			);
-
-		if (settings.advancedMode) {
-			this.renderV2Connection(root);
-			return;
-		}
 
 		new Setting(root)
 			.setName("Personal API token")
@@ -213,34 +170,6 @@ export class TickTickSettingTab extends PluginSettingTab {
 			);
 	}
 
-	private renderV2Connection(root: HTMLElement): void {
-		const { settings } = this.plugin;
-
-		new Setting(root)
-			.setName(settings.v2Session ? "Signed in" : "Not signed in")
-			.setDesc(
-				settings.v2Session
-					? "A session token is stored for the internal API."
-					: "Sign in with your TickTick email and password.",
-			)
-			.addButton((button) =>
-				button
-					.setButtonText(settings.v2Session ? "Sign in again" : "Sign in")
-					.setCta()
-					.onClick(() => this.connectV2()),
-			)
-			.addButton((button) =>
-				button
-					.setButtonText("Sign out")
-					.setDisabled(!settings.v2Session)
-					.onClick(async () => {
-						settings.v2Session = null;
-						await this.plugin.saveSettings();
-						this.display();
-					}),
-			);
-	}
-
 	private async connectOAuth(): Promise<void> {
 		const { settings } = this.plugin;
 		if (!settings.auth.clientId || !settings.auth.clientSecret) {
@@ -279,37 +208,6 @@ export class TickTickSettingTab extends PluginSettingTab {
 		} catch (error) {
 			new Notice(`Could not connect: ${error instanceof Error ? error.message : String(error)}`);
 		}
-	}
-
-	private connectV2(): void {
-		new V2LoginModal(this.app, (credentials) => {
-			if (!credentials) return;
-			void (async () => {
-				// A sign-in that works in a browser but not here is almost always
-				// the field never being captured, or stray whitespace from a paste.
-				// Only the shape is logged — never the password itself.
-				this.plugin.log("Sign-on attempt", {
-					email: credentials.username,
-					emailLength: credentials.username.length,
-					passwordLength: credentials.password.length,
-					passwordHasEdgeWhitespace: credentials.password !== credentials.password.trim(),
-				});
-
-				try {
-					const session = await v2SignOn(
-						this.plugin.queue,
-						credentials.username,
-						credentials.password,
-					);
-					this.plugin.settings.v2Session = session;
-					await this.plugin.saveSettings();
-					new Notice("Signed in to TickTick.");
-					this.display();
-				} catch (error) {
-					new Notice(signInFailureMessage(error), 15_000);
-				}
-			})();
-		}).open();
 	}
 
 	// --- Sync ---------------------------------------------------------------

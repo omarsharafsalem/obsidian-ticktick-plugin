@@ -23,10 +23,6 @@ export class ApiError extends Error {
 		return isPermanentFailure(this.body);
 	}
 
-	/** True when TickTick has temporarily barred further sign-in attempts. */
-	get isLockout(): boolean {
-		return this.body.toLowerCase().includes("too_many_times");
-	}
 }
 
 /**

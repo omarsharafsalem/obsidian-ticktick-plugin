@@ -83,19 +83,16 @@ describe("HttpQueue retries", () => {
 });
 
 describe("ApiError classification", () => {
-	it("recognises a credential failure and a lockout", () => {
+	it("recognises a permanent application error reported as a 500", () => {
 		const locked = new ApiError(500, "https://example.test/signon", LOCKED_OUT.text);
 		expect(locked.isCredentialFailure).toBe(true);
-		expect(locked.isLockout).toBe(true);
 
 		const wrong = new ApiError(500, "https://example.test/signon", WRONG_PASSWORD.text);
 		expect(wrong.isCredentialFailure).toBe(true);
-		expect(wrong.isLockout).toBe(false);
 	});
 
 	it("leaves an ordinary server error alone", () => {
 		const server = new ApiError(500, "https://example.test/x", "internal error");
 		expect(server.isCredentialFailure).toBe(false);
-		expect(server.isLockout).toBe(false);
 	});
 });
