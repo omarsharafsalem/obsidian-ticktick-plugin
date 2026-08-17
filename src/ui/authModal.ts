@@ -54,9 +54,16 @@ export class PasteCodeModal extends Modal {
 }
 
 /** Username and password prompt for the unofficial v2 sign-on. */
+/**
+ * Below any real account password, so this only ever catches a field that was
+ * not filled in properly — not a short but genuine one.
+ */
+const IMPLAUSIBLY_SHORT_PASSWORD = 4;
+
 export class V2LoginModal extends Modal {
 	private usernameEl?: HTMLInputElement;
 	private passwordEl?: HTMLInputElement;
+	private errorEl?: HTMLElement;
 
 	constructor(
 		app: App,
@@ -88,6 +95,9 @@ export class V2LoginModal extends Modal {
 			text.inputEl.addEventListener("keydown", (event) => this.onKeyDown(event));
 		});
 
+		this.errorEl = contentEl.createEl("p", { cls: "mod-warning" });
+		this.errorEl.hide();
+
 		new Setting(contentEl)
 			.addButton((button) => button.setButtonText("Sign in").setCta().onClick(() => this.submit()))
 			.addButton((button) =>
@@ -100,8 +110,18 @@ export class V2LoginModal extends Modal {
 
 	private onKeyDown(event: KeyboardEvent): void {
 		if (event.key !== "Enter") return;
+		// A password manager's suggestion list also takes Enter, and its keydown
+		// reaches us before the value lands in the field. Submitting here would
+		// send whatever had been typed so far — one character, in the case that
+		// prompted this guard. Let the validation in submit() catch it.
 		event.preventDefault();
 		this.submit();
+	}
+
+	private showError(message: string): void {
+		if (!this.errorEl) return;
+		this.errorEl.setText(message);
+		this.errorEl.show();
 	}
 
 	/**
@@ -118,10 +138,26 @@ export class V2LoginModal extends Modal {
 	 * one.
 	 */
 	private submit(): void {
-		this.onSubmit({
-			username: this.usernameEl?.value.trim() ?? "",
-			password: this.passwordEl?.value ?? "",
-		});
+		const username = this.usernameEl?.value.trim() ?? "";
+		const password = this.passwordEl?.value ?? "";
+
+		// Never spend a sign-in attempt on a form that cannot succeed. TickTick
+		// counts every rejection against the account and locks it after a
+		// handful, so a half-filled field must not reach the network.
+		if (!username || !password) {
+			this.showError("Enter both your email and password before signing in.");
+			return;
+		}
+
+		if (password.length < IMPLAUSIBLY_SHORT_PASSWORD) {
+			this.showError(
+				`That password is only ${password.length} character${password.length === 1 ? "" : "s"} — ` +
+					"it looks like it was not fully entered. Type it in and press Sign in.",
+			);
+			return;
+		}
+
+		this.onSubmit({ username, password });
 		this.close();
 	}
 
