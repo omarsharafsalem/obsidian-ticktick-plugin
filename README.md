@@ -115,25 +115,42 @@ delete, so an edit is never silently thrown away. This is configurable.
 Deliberate deletions are recorded as tombstones so a deleted task is not re-created by the next pull
 before the delete has propagated.
 
-## Which API to use
+## Which API this uses
 
-**Official Open API (default).** OAuth2, sanctioned, stable. It is also narrow: two scopes, a
-handful of endpoints, no search, no tag endpoint, no completed-task history, no per-task
-modification time, and no way to list all tasks — you walk project by project.
+The **official Open API**, and only that. An earlier version also offered an "advanced mode" that
+spoke TickTick's internal `/api/v2`; it has been removed. Reading the Open API documentation
+properly showed that it already covers almost everything advanced mode was there for:
 
-**Advanced mode (opt-in).** TickTick's internal `/api/v2`, the one the web app uses. It adds
-completed-task history, per-task modification times, tags, and a single-request full state fetch. It
-authenticates with your account password to obtain a session token, is not covered by TickTick's
-developer terms, and can break without notice.
+| | Open API |
+| --- | --- |
+| List completed tasks | `POST /open/v1/task/completed` |
+| Search | `POST /open/v1/task/search` |
+| Tag vocabulary | `GET /open/v1/tag` |
+| Inbox | `POST /open/v1/task/filter` with `projectIds: ["inbox"]` |
+| Per-task modification time | **not available** |
 
-The practical difference: on the official API, "most recently edited wins" cannot be evaluated
-because there are no modification times, so conflicts fall back to preferring TickTick. Advanced
-mode makes conflict resolution and deletion detection precise. Nothing in the plugin depends on it —
-every call site degrades gracefully when it is off.
+That last row is the only genuine gap, and it affects one thing: when both sides changed the *same*
+field of the same task between syncs, "most recently edited wins" has nothing to compare. Everything
+else — the three-way merge, per-field direction control, deletion detection — is unaffected.
+
+Against that, the internal API is unofficial, outside TickTick's developer terms, can break without
+notice, and its sign-on endpoint rate-limits by IP aggressively enough to lock an account out after
+a handful of attempts. Not a trade worth making for one tie-break rule.
 
 ## Setup
 
-### Official API
+### Personal API token (recommended)
+
+1. Open the [TickTick web app](https://ticktick.com/webapp/).
+2. Click your avatar (top left) → **Settings** → **Account** → **API Token**.
+3. Create a token and paste it into **Personal API token** in the plugin settings.
+
+That is the whole setup — no app registration, no client ID or secret, no redirect URI, and no
+password. Treat the token like a password: it grants access to your account.
+
+### OAuth
+
+Only needed to authorise accounts other than your own.
 
 1. Register an app at [developer.ticktick.com](https://developer.ticktick.com).
 2. Set its redirect URI to `http://localhost:8484/callback` (the port is configurable in settings).
@@ -141,11 +158,6 @@ every call site degrades gracefully when it is off.
 
 On desktop the plugin listens on the loopback port and completes the handshake automatically. On
 mobile, or if the port is taken, it falls back to pasting the redirected URL.
-
-### Advanced mode
-
-Toggle **Advanced mode** in settings and sign in with your TickTick email and password. The password
-is used once to obtain a session token and is not stored.
 
 ## Development
 
@@ -163,7 +175,7 @@ To try it in a vault, symlink or copy `main.js`, `manifest.json` and `styles.css
 
 | Path | Responsibility |
 | --- | --- |
-| `src/api/` | TickTick clients — `openApi.ts` (official), `v2.ts` (unofficial), shared normalisation and a rate-limiting request queue |
+| `src/api/` | The TickTick client — `openApi.ts`, wire-format normalisation, and a rate-limiting request queue. All timezone handling lives here, so nothing above it needs to know about zones |
 | `src/auth/` | OAuth2 authorisation-code flow, token refresh, loopback listener |
 | `src/sync/reconcile.ts` | Three-way merge. All "who wins" policy lives here, as pure functions |
 | `src/sync/fieldModes.ts` | Per-field direction rules, applied by rewriting the merge inputs |
@@ -174,7 +186,8 @@ To try it in a vault, symlink or copy `main.js`, `manifest.json` and `styles.css
 | `src/vault/` | Vault I/O, YAML frontmatter, property type registration |
 
 The policy modules are pure by design, so conflict behaviour is testable without a vault or a
-network. 76 unit tests cover tag parsing, the mapper round-trip, merge decisions and direction rules.
+network. 107 unit tests cover tag parsing, the mapper round-trip, merge decisions, direction rules,
+wire-format normalisation, all-day dates across timezones, and the request queue's retry rules.
 
 ## Status and limitations
 
@@ -186,10 +199,11 @@ data.
 Known constraints, all stemming from the API rather than the plugin:
 
 - **Polling only.** No webhooks exist; sync latency is bound by the poll interval.
-- **Inbox.** The official API's project list does not include the Inbox, so Inbox tasks are not
-  enumerated in default mode. Advanced mode does see them.
-- **No completed history on the official API.** Completions are detected by direct fetch rather than
-  by listing, which costs one request per task that left a listing.
+- **No per-task modification time.** "Most recently edited wins" cannot be evaluated on a field both
+  sides changed, so those conflicts fall back to the configured policy.
+- **The Inbox is capped at 200 tasks per sync.** `GET /project` omits the Inbox entirely, so it is
+  read through the filter endpoint, which returns at most 200 records.
+- **Completed-task history reaches back 90 days** and returns at most 200 tasks per call.
 - **Attachments and comments are not synced.**
 - Non-checkbox lines written under the `## Subtasks` heading are dropped on the next write — that
   heading is plugin-owned.
