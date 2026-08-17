@@ -466,6 +466,17 @@ export class SyncEngine {
 		const localNote = localById.get(taskId);
 		let remoteRecord = remote.get(taskId);
 
+		// Nothing on either side. Whatever was being tracked is finished with, so
+		// stop tracking it rather than reasoning about which side went first.
+		if (!localNote && !remoteRecord && entry && !notes.getFile(entry.notePath)) {
+			this.deps.log("Both sides are gone; forgetting", {
+				taskId,
+				notePath: entry.notePath,
+			});
+			store.forget(taskId);
+			return;
+		}
+
 		// Count consecutive passes in which the note has not turned up, and reset
 		// the moment it does. This is what "confirmed gone" is measured against.
 		if (entry) {
@@ -492,9 +503,15 @@ export class SyncEngine {
 			return;
 		}
 
-		// A tracked task missing from the listing is either completed or deleted.
-		// Only a direct fetch can tell them apart on the official API.
-		if (!remoteRecord && entry) {
+		// A tracked task missing from the listing is either completed or deleted,
+		// and a direct fetch is the only way to tell on the official API.
+		//
+		// Only worth asking while the note still exists, because the answer only
+		// decides what happens to that note. With the note gone as well there is
+		// nothing to create, change or delete — and asking anyway is harmful:
+		// TickTick deletes to a trash, so a deleted task still answers the fetch,
+		// which reads as "still there" and restores the note the user removed.
+		if (!remoteRecord && entry && localNote) {
 			const probed = await this.probeRemote(entry);
 
 			// Unknown is not "gone" and not "still there". Skipping is the only

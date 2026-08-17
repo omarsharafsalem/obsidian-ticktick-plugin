@@ -359,3 +359,31 @@ describe("reconcile — a note that was linked before", () => {
 		expect(action.kind).toBe("createRemote");
 	});
 });
+
+/**
+ * TickTick deletes to a trash rather than erasing, so a deleted task still
+ * answers a direct fetch. That made "deleted" and "still there" identical, and
+ * the note the user had removed was restored on every sync.
+ */
+describe("reconcile — both sides gone", () => {
+	const options: ReconcileOptions = {
+		conflictPolicy: "newest",
+		deleteConflictPolicy: "restore",
+		remoteDeletion: "keepNote",
+		noteDeletion: "keepTask",
+	};
+
+	it("stops tracking rather than restoring anything", () => {
+		expect(reconcile({ base: snap() }, options).kind).toBe("forget");
+	});
+
+	it("does nothing at all when there was never anything to track", () => {
+		expect(reconcile({}, options).kind).toBe("noop");
+	});
+
+	it("still restores a note when the task genuinely remains", () => {
+		// The distinction that matters: a task present in the listing is real,
+		// and its note should come back. Only the fetched-from-trash case is bad.
+		expect(reconcile({ base: snap(), remote: snap() }, options).kind).toBe("restoreLocal");
+	});
+});
