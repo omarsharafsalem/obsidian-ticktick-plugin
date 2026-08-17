@@ -245,6 +245,52 @@ export class TickTickSettingTab extends PluginSettingTab {
 		root.createEl("h2", { text: "Sync" });
 
 		new Setting(root)
+			.setName("Mark a note as a task with")
+			.setDesc(
+				"A property and value that identify a task, e.g. note_type = task. Without this, every " +
+					"note in the task folder is treated as a task and would be pushed to TickTick. With " +
+					"it, task notes can sit among ordinary ones. A note that already has a task ID stays " +
+					"a task regardless.",
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("Property, e.g. note_type")
+					.setValue(settings.taskMarker.property)
+					.onChange(async (value) => {
+						settings.taskMarker.property = value.trim();
+						await this.plugin.saveSettings();
+					}),
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("Value, e.g. task")
+					.setValue(settings.taskMarker.value)
+					.onChange(async (value) => {
+						settings.taskMarker.value = value.trim() || "task";
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(root)
+			.setName("Find task notes anywhere in the vault")
+			.setDesc(
+				"Search the whole vault rather than just the task folder, so a task can live inside the " +
+					"project folder it belongs to. Needs the marker above — without it every note in your " +
+					"vault would count as a task.",
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(settings.discoverAnywhere).onChange(async (value) => {
+					if (value && !settings.taskMarker.property.trim()) {
+						new Notice("Set the task marker property first — otherwise every note is a task.");
+						toggle.setValue(false);
+						return;
+					}
+					settings.discoverAnywhere = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(root)
 			.setName("Task folder")
 			.setDesc("Every task becomes one note inside this folder.")
 			.addText((text) =>

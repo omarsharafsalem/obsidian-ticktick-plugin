@@ -186,7 +186,14 @@ export class SyncEngine {
 		projectNames: Map<string, string>,
 	): Promise<LocalNote[]> {
 		const { notes, settings } = this.deps;
-		const files = notes.listMarkdown(settings.taskFolder);
+
+		// Scanning the whole vault is only safe with a marker to identify tasks by;
+		// without one every note in the vault would look like a task.
+		const marker = settings.taskMarker;
+		const markerActive = marker.property.trim() !== "";
+		const files = notes.listMarkdown(
+			markerActive && settings.discoverAnywhere ? "" : settings.taskFolder,
+		);
 
 		// The list property holds a name, so reading a note means turning it back
 		// into an id. Matched case-insensitively, since the value is hand-editable.
@@ -208,6 +215,13 @@ export class SyncEngine {
 			try {
 				const note = await notes.read(file);
 				const parsed = noteToTask(note, note.title, mapperOptions);
+
+				// A note already carrying a task id stays a task whatever else
+				// changed, so an edit to the marker cannot orphan a synced note.
+				if (!parsed.id && markerActive && !matchesMarker(note.frontmatter, marker)) {
+					continue;
+				}
+
 				result.push({
 					file,
 					taskId: parsed.id,
@@ -570,6 +584,7 @@ export class SyncEngine {
 				properties: settings.properties,
 				inlineTags: settings.inlineTags,
 				labels: settings.labels,
+				marker: settings.taskMarker,
 			},
 			this.links.contextFor(task),
 		);
@@ -613,6 +628,26 @@ export class SyncEngine {
 			lastSyncedAt: Date.now(),
 		};
 	}
+}
+
+/**
+ * Whether a note declares itself a task.
+ *
+ * The property is typically list-typed in a real vault — `note_type: [task]` —
+ * so a single value and a list of values both count, and the comparison ignores
+ * case since it is hand-entered.
+ */
+function matchesMarker(
+	frontmatter: Record<string, unknown> | undefined,
+	marker: { property: string; value: string },
+): boolean {
+	const raw = (frontmatter ?? {})[marker.property.trim()];
+	if (raw === undefined || raw === null) return false;
+
+	const wanted = marker.value.trim().toLowerCase();
+	const values = Array.isArray(raw) ? raw : [raw];
+
+	return values.some((entry) => String(entry).trim().toLowerCase() === wanted);
 }
 
 function describeError(error: unknown): string {

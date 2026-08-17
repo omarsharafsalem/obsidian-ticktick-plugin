@@ -165,7 +165,24 @@ export interface AuthSettings {
 export interface TickTickSyncSettings {
 	auth: AuthSettings;
 
-	/** Vault folder that holds task notes. */
+	/**
+	 * The property that marks a note as a task, e.g. `note_type: task`.
+	 *
+	 * Without it the only thing separating a task from an ordinary note is which
+	 * folder it sits in, so anything filed alongside a task would be pushed to
+	 * TickTick as one. With it, task notes can live among ordinary notes.
+	 *
+	 * An empty `property` disables the check and restores folder-only behaviour.
+	 */
+	taskMarker: { property: string; value: string };
+
+	/**
+	 * Look for task notes across the whole vault rather than under
+	 * {@link taskFolder}. Requires a marker, or every note would be a task.
+	 */
+	discoverAnywhere: boolean;
+
+	/** Vault folder that holds task notes, and where new ones are created. */
 	taskFolder: string;
 	/** Create a subfolder per TickTick list. */
 	folderPerProject: boolean;
@@ -226,6 +243,8 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 		tokens: null,
 		loopbackPort: 8484,
 	},
+	taskMarker: { property: "", value: "task" },
+	discoverAnywhere: false,
 	taskFolder: "Tasks",
 	folderPerProject: true,
 	syncIntervalMinutes: 5,
@@ -268,6 +287,7 @@ export function mergeSettings(stored: unknown): TickTickSyncSettings {
 		properties: { ...DEFAULT_PROPERTIES, ...(raw.properties ?? {}) },
 		fieldModes: { ...DEFAULT_FIELD_MODES, ...(raw.fieldModes ?? {}) },
 		listFolders: { ...(raw.listFolders ?? {}) },
+		taskMarker: { ...DEFAULT_SETTINGS.taskMarker, ...(raw.taskMarker ?? {}) },
 		labels: {
 			status: { ...DEFAULT_STATUS_LABELS, ...(raw.labels?.status ?? {}) },
 			priority: { ...DEFAULT_PRIORITY_LABELS, ...(raw.labels?.priority ?? {}) },

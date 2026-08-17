@@ -130,9 +130,11 @@ export class NoteRepository {
 		return file instanceof TFile ? file : null;
 	}
 
-	/** Every markdown file under `folder`, recursively. */
+	/** Every markdown file under `folder`, recursively. An empty folder means all. */
 	listMarkdown(folder: string): TFile[] {
 		const root = normalizePath(folder);
+		if (!root || root === "/" || root === ".") return this.app.vault.getMarkdownFiles();
+
 		return this.app.vault
 			.getMarkdownFiles()
 			.filter((file) => file.path === root || file.path.startsWith(`${root}/`));

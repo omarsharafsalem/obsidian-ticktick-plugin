@@ -77,6 +77,11 @@ export interface MapperOptions {
 	labels?: ValueLabels;
 	/** Turns a wikilink target — a note title or path — back into a task id. */
 	resolveTaskLink?: (target: string) => string | undefined;
+	/**
+	 * Stamped onto notes this plugin creates, so they are recognised by the same
+	 * rule as notes written by hand rather than only by where they sit.
+	 */
+	marker?: { property: string; value: string };
 }
 
 export const DEFAULT_MAPPER_OPTIONS: MapperOptions = {
@@ -222,6 +227,9 @@ export function taskToNote(
 	// The etag is a server version token and deliberately never reaches the
 	// note — it is bookkeeping, kept in the plugin's own state instead.
 	if (titleNeedsFrontmatter(task.title)) frontmatter[p.title] = task.title;
+
+	const marker = options.marker;
+	if (marker?.property.trim()) frontmatter[marker.property.trim()] = marker.value;
 
 	const due = toFrontmatterDate(task.dueDate, task.isAllDay);
 	if (due) frontmatter[p.due] = due;

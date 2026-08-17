@@ -351,6 +351,22 @@ describe("value labels", () => {
 	});
 });
 
+describe("the task marker", () => {
+	it("stamps notes it creates so they match hand-written ones", () => {
+		const note = taskToNote(task(), {
+			...options,
+			marker: { property: "note_type", value: "task" },
+		});
+
+		expect(note.frontmatter.note_type).toBe("task");
+	});
+
+	it("writes nothing when no marker is configured", () => {
+		const note = taskToNote(task(), { ...options, marker: { property: "", value: "task" } });
+		expect(note.frontmatter.note_type).toBeUndefined();
+	});
+});
+
 describe("the all-day flag", () => {
 	it("marks an all-day task explicitly", () => {
 		const note = taskToNote(task({ dueDate: "2026-08-20T00:00:00.000Z", isAllDay: true }), options);
