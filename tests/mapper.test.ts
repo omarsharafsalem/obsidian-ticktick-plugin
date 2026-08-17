@@ -5,6 +5,7 @@ import {
 	buildBody,
 	noteToTask,
 	parsedNoteToTask,
+	resolveTitle,
 	restoreItemMetadata,
 	sanitiseFilename,
 	splitBody,
@@ -905,5 +906,35 @@ describe("reminder names", () => {
 
 	it("ignores anything that is not a duration", () => {
 		expect(triggerToMinutes("TRIGGER:nonsense")).toBeUndefined();
+	});
+});
+
+/**
+ * A filename cannot hold a colon or a slash, so the note for "Read: chapter 3/4"
+ * is called "Read- chapter 3-4". Treating that as the title pushed the mangled
+ * version back to TickTick and flattened the punctuation for good.
+ */
+describe("recovering a title a filename cannot hold", () => {
+	it("keeps the real title when the filename is just its sanitised form", () => {
+		expect(resolveTitle("Read- chapter 3-4", "Read: chapter 3/4")).toBe("Read: chapter 3/4");
+	});
+
+	it("takes the filename when the note was genuinely renamed", () => {
+		expect(resolveTitle("Something else entirely", "Read: chapter 3/4")).toBe(
+			"Something else entirely",
+		);
+	});
+
+	it("uses the filename when nothing is known yet", () => {
+		expect(resolveTitle("A brand new note")).toBe("A brand new note");
+	});
+
+	it("leaves an ordinary title alone", () => {
+		expect(resolveTitle("Buy milk", "Buy milk")).toBe("Buy milk");
+	});
+
+	it("survives a title that is only punctuation", () => {
+		const filed = sanitiseFilename("???");
+		expect(resolveTitle(filed, "???")).toBe("???");
 	});
 });

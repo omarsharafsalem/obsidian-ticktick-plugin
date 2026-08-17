@@ -7,6 +7,7 @@ import { applyFieldModes } from "./fieldModes";
 import {
 	noteToTask,
 	parsedNoteToTask,
+	resolveTitle,
 	restoreItemMetadata,
 	sanitiseFilename,
 	taskToNote,
@@ -252,7 +253,7 @@ export class SyncEngine {
 		report: SyncReport,
 		projectNames: Map<string, string>,
 	): Promise<LocalNote[]> {
-		const { notes, settings } = this.deps;
+		const { notes, settings, store } = this.deps;
 
 		// Scanning the whole vault is only safe with a marker to identify tasks by;
 		// without one every note in the vault would look like a task.
@@ -312,6 +313,14 @@ export class SyncEngine {
 				// a task. Left alone: syncing it again would recreate the task.
 				if (inDeletedFolder(file.path, settings.deletedTaskFolder)) continue;
 
+				// A filename cannot hold a colon, a slash or a question mark, so a
+				// task titled "Read: chapter 3/4" is filed as "Read- chapter 3-4".
+				// The real title is in the last-agreed state, and is kept unless the
+				// file has genuinely been renamed to something else — otherwise
+				// every awkward title is flattened the first time it is pushed back.
+				const tracked = parsed.id ? store.get(parsed.id) : undefined;
+				const title = resolveTitle(parsed.title, tracked?.base.title);
+
 				// A note already carrying a task id stays a task whatever else
 				// changed, so an edit to the marker cannot orphan a synced note.
 				if (!parsed.id && markerActive && !matchesMarker(note.frontmatter, marker)) {
@@ -337,7 +346,7 @@ export class SyncEngine {
 					privateBody: parsed.privateBody,
 					statusLabel: readStatusLabel(note.frontmatter[settings.properties.status]),
 					snapshot: toSnapshot(
-						parsedNoteToTask({ ...parsed, projectId }, blankTask(projectId)),
+						parsedNoteToTask({ ...parsed, title, projectId }, blankTask(projectId)),
 					),
 				});
 			} catch (error) {

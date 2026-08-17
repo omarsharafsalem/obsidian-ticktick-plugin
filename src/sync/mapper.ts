@@ -282,6 +282,21 @@ export function sanitiseFilename(title: string): string {
 	return truncated.length > 0 ? truncated : "Untitled task";
 }
 
+/**
+ * A task's real title, given the note's filename and the last title agreed with
+ * TickTick.
+ *
+ * A filename cannot hold a colon, a slash or a question mark, so "Read: chapter
+ * 3/4" is filed as "Read- chapter 3-4". Taking the filename as the title would
+ * push that back and flatten the punctuation permanently — so the known title
+ * wins whenever the filename is exactly what it sanitises to. A filename that
+ * differs is a genuine rename, and then the filename is the intent.
+ */
+export function resolveTitle(filenameTitle: string, knownTitle?: string): string {
+	if (knownTitle && sanitiseFilename(knownTitle) === filenameTitle) return knownTitle;
+	return filenameTitle;
+}
+
 /** True when the filename alone cannot round-trip the title. */
 export function titleNeedsFrontmatter(title: string): boolean {
 	return sanitiseFilename(title) !== title;
