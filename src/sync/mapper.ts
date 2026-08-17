@@ -402,9 +402,11 @@ export function taskToNote(
 		[p.priority]: labels.priority[task.priority] ?? task.priority,
 	};
 
-	// The etag, the all-day flag and a title a filename cannot hold are all kept
-	// in the plugin's own state rather than the note. They are bookkeeping, and
-	// a vault should not grow properties to carry them.
+	// Written only when the filename cannot carry the title, so an ordinary task
+	// gains nothing and a punctuated one is still readable. The sync does not
+	// depend on it — the real title lives in the plugin's state — but a person
+	// reading the note otherwise has no way to see what the task is called.
+	if (titleNeedsFrontmatter(task.title)) frontmatter[p.title] = task.title;
 
 	const marker = options.marker;
 	if (marker?.property.trim()) frontmatter[marker.property.trim()] = marker.value;

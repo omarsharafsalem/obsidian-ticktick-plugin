@@ -31,6 +31,7 @@ const FIELD_LABELS: Record<SyncedField, string> = {
 const PROPERTY_LABELS: Record<keyof PropertyNames, string> = {
 	id: "Task ID",
 	project: "List",
+	title: "Title override",
 	status: "Status",
 	priority: "Priority",
 	due: "Due date",

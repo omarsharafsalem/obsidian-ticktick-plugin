@@ -67,12 +67,6 @@ describe("taskToNote", () => {
 		expect(note.frontmatter.tags).toEqual(["work", "home"]);
 	});
 
-	it("never writes a title override property", () => {
-		// The real title lives in the plugin's own state, not in the vault.
-		const note = taskToNote(task({ title: "Read: chapter 3/4" }), options);
-		expect(JSON.stringify(note.frontmatter)).not.toContain("Read: chapter 3/4");
-	});
-
 	it("honours custom property names", () => {
 		const custom: MapperOptions = {
 			...options,
@@ -936,5 +930,27 @@ describe("recovering a title a filename cannot hold", () => {
 	it("survives a title that is only punctuation", () => {
 		const filed = sanitiseFilename("???");
 		expect(resolveTitle(filed, "???")).toBe("???");
+	});
+});
+
+/**
+ * The filename cannot hold a colon or a slash, so without a property there is
+ * nowhere in Obsidian showing what the task is really called. The sync does not
+ * depend on it — the title lives in plugin state — but a reader does.
+ */
+describe("showing a title the filename cannot hold", () => {
+	it("writes the real title when punctuation forces a different filename", () => {
+		const note = taskToNote(task({ title: "Read: chapter 3/4" }), options);
+		expect(note.frontmatter.ticktick_title).toBe("Read: chapter 3/4");
+	});
+
+	it("writes nothing for an ordinary title", () => {
+		const note = taskToNote(task({ title: "Buy milk" }), options);
+		expect(note.frontmatter.ticktick_title).toBeUndefined();
+	});
+
+	it("covers every character a filename rejects", () => {
+		const note = taskToNote(task({ title: "Meeting: notes 1/2 — who?" }), options);
+		expect(note.frontmatter.ticktick_title).toBe("Meeting: notes 1/2 — who?");
 	});
 });

@@ -163,7 +163,13 @@ export class SyncEngine {
 			this.links = this.buildLinkIndex(remote, projectNames);
 			const local = await this.loadLocalNotes(report, projectNames);
 
-			await this.reconcileAll({ remote, local, projectNames, report });
+			await this.reconcileAll({
+				remote,
+				local,
+				projectNames,
+				report,
+				syncedProjects: new Set(projectNames.keys()),
+			});
 			await this.createUnlinkedNotes(local, remote, projectNames, report);
 
 			this.deps.store.markSynced();
@@ -447,8 +453,9 @@ export class SyncEngine {
 		local: LocalNote[];
 		projectNames: Map<string, string>;
 		report: SyncReport;
+		syncedProjects: Set<string>;
 	}): Promise<void> {
-		const { remote, local, projectNames, report } = context;
+		const { remote, local, projectNames, report, syncedProjects } = context;
 		const { store } = this.deps;
 
 		const localById = new Map<string, LocalNote>();
@@ -464,7 +471,14 @@ export class SyncEngine {
 
 		for (const taskId of taskIds) {
 			try {
-				await this.reconcileOne({ taskId, remote, localById, projectNames, report });
+				await this.reconcileOne({
+					taskId,
+					remote,
+					localById,
+					projectNames,
+					report,
+					syncedProjects,
+				});
 			} catch (error) {
 				report.errors.push(`Task ${taskId}: ${describeError(error)}`);
 			}
@@ -477,8 +491,9 @@ export class SyncEngine {
 		localById: Map<string, LocalNote>;
 		projectNames: Map<string, string>;
 		report: SyncReport;
+		syncedProjects: Set<string>;
 	}): Promise<void> {
-		const { taskId, remote, localById, projectNames, report } = context;
+		const { taskId, remote, localById, projectNames, report, syncedProjects } = context;
 		const { store, settings, notes } = this.deps;
 
 		if (store.isTombstoned(taskId)) return;
@@ -521,6 +536,18 @@ export class SyncEngine {
 				`${entry.notePath} still exists but was not recognised as a task, so its TickTick task ` +
 					"was left untouched. Check the task ID property and the task marker.",
 			);
+			return;
+		}
+
+		// A task belonging to a list that was not synced was never looked for, so
+		// its absence says nothing at all. Without this, narrowing the lists to
+		// sync archives every note belonging to the lists left out.
+		if (!remoteRecord && entry?.projectId && !syncedProjects.has(entry.projectId)) {
+			this.deps.log("Task belongs to a list that is not being synced; leaving it alone", {
+				taskId,
+				projectId: entry.projectId,
+				notePath: entry.notePath,
+			});
 			return;
 		}
 

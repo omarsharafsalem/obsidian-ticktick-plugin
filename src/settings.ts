@@ -25,6 +25,14 @@ export interface PropertyNames {
 	recurrence: string;
 	reminders: string;
 	completed: string;
+	/**
+	 * The real title, written only when a filename cannot hold it.
+	 *
+	 * A note for "Read: chapter 3/4" has to be called "Read- chapter 3-4", so
+	 * without this there is nowhere in Obsidian showing what the task is actually
+	 * called. Absent on every ordinary title, where the filename says it already.
+	 */
+	title: string;
 	parent: string;
 	/** Links to the tasks whose parent is this one. Derived, never read back. */
 	children: string;
@@ -34,6 +42,7 @@ export const DEFAULT_PROPERTIES: PropertyNames = {
 	id: "ticktick_task_id",
 	project: "project",
 	status: "status",
+	title: "ticktick_title",
 	priority: "priority",
 	due: "due",
 	start: "start",
