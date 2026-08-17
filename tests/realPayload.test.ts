@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normaliseTask, serialiseTask } from "../src/api/openApi";
-import { taskToNote } from "../src/sync/mapper";
+import { DEFAULT_MAPPER_OPTIONS, taskToNote, type MapperOptions } from "../src/sync/mapper";
 
 /**
  * A real response from TickTick, captured 17 Aug 2026 by creating an all-day
@@ -60,8 +60,13 @@ const TIMED_AT_0030_ON_THE_18TH = {
 };
 
 describe("a real timed task from TickTick", () => {
+	// These read the task's own zone rather than the machine's, so they assert
+	// the same thing everywhere. Rendering on the reader's clock is the default
+	// in the plugin, but a test cannot pin down the reader's clock portably.
+	const inTaskZone: MapperOptions = { ...DEFAULT_MAPPER_OPTIONS, useTaskTimeZone: true };
+
 	it("shows the time the user chose, on the day they chose", () => {
-		const note = taskToNote(normaliseTask(TIMED_AT_0030_ON_THE_18TH));
+		const note = taskToNote(normaliseTask(TIMED_AT_0030_ON_THE_18TH), inTaskZone);
 
 		// The bug wrote "2026-08-17T23:30:00.000Z" — right instant, wrong day
 		// to read, because Obsidian displays a datetime verbatim.
@@ -74,6 +79,7 @@ describe("a real timed task from TickTick", () => {
 				...TIMED_AT_0030_ON_THE_18TH,
 				dueDate: "2026-08-18T13:30:00+0000",
 			}),
+			inTaskZone,
 		);
 
 		expect(note.frontmatter.due).toBe("2026-08-18T14:30");

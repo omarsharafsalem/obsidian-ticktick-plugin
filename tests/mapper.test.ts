@@ -53,7 +53,9 @@ describe("taskToNote", () => {
 
 		const timed = taskToNote(
 			task({ dueDate: "2026-08-20T09:30:00.000Z", isAllDay: false, timeZone: "Europe/London" }),
-			options,
+			// The zone is asked for explicitly. Without this the test would assert
+			// the machine's own clock, which passes here and fails on CI in UTC.
+			{ ...options, useTaskTimeZone: true },
 		);
 		// 09:30 UTC is 10:30 in London in August, and that is what a reader wants.
 		expect(timed.frontmatter.due).toBe("2026-08-20T10:30");
