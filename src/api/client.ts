@@ -10,13 +10,14 @@ import type { NewTask, Project, Task } from "./types";
 export interface Capabilities {
 	/** Can list tasks completed in a date range. */
 	completedHistory: boolean;
-	/** Has a server-side search endpoint. */
-	search: boolean;
-	/** Exposes the user's tag vocabulary. */
-	tags: boolean;
-	/** Reports a per-task last-modified timestamp. */
+	/**
+	 * Reports a per-task last-modified timestamp.
+	 *
+	 * The Open API does not, so "most recently edited wins" is answered instead
+	 * from when a remote change was first *observed* — see `SyncStore`.
+	 */
 	modifiedTime: boolean;
-	/** Can enumerate the Inbox project. */
+	/** Can enumerate the Inbox alongside ordinary projects. */
 	inbox: boolean;
 }
 

@@ -14,14 +14,21 @@ import {
 
 export const OPEN_API_BASE = "https://api.ticktick.com/open/v1";
 
-/** Everything the official API cannot do. See README for the consequences. */
+/**
+ * The Open API is much less limited than it is often described.
+ *
+ * It lists completed tasks (`POST /task/completed`) and reaches the Inbox
+ * through `POST /task/filter` with the reserved id below. The one genuine gap
+ * is a per-task modification time, which no endpoint returns.
+ */
 const OPEN_API_CAPABILITIES: Capabilities = {
-	completedHistory: false,
-	search: false,
-	tags: false,
+	completedHistory: true,
 	modifiedTime: false,
-	inbox: false,
+	inbox: true,
 };
+
+/** TickTick's reserved project id for the Inbox, accepted by the filter endpoint. */
+export const INBOX_PROJECT_ID = "inbox";
 
 type Json = Record<string, unknown>;
 
@@ -159,10 +166,28 @@ export class OpenApiClient implements TickTickClient {
 
 	async listProjects(): Promise<Project[]> {
 		const raw = await this.send("GET", "/project");
-		return asArray(raw).map(normaliseProject);
+		const projects = asArray(raw).map(normaliseProject);
+
+		// `GET /project` omits the Inbox, so its tasks would never be enumerated.
+		// It is prepended as an ordinary project so the rest of the engine — and
+		// the per-list filter in settings — can treat it like any other list.
+		return [
+			{ id: INBOX_PROJECT_ID, name: "Inbox", closed: false, kind: "TASK" },
+			...projects,
+		];
 	}
 
 	async listTasksInProject(projectId: string): Promise<Task[]> {
+		// The Inbox has no `/project/{id}/data` endpoint; the filter endpoint is
+		// the only route to it. That caps the Inbox at 200 tasks per sync.
+		if (projectId === INBOX_PROJECT_ID) {
+			const raw = await this.send("POST", "/task/filter", {
+				projectIds: [INBOX_PROJECT_ID],
+				status: [0],
+			});
+			return asArray(raw).map(normaliseTask);
+		}
+
 		try {
 			const raw = (await this.send("GET", `/project/${projectId}/data`)) as Json | undefined;
 			return asArray(raw?.["tasks"]).map(normaliseTask);
@@ -210,9 +235,23 @@ export class OpenApiClient implements TickTickClient {
 		}
 	}
 
-	async listCompletedTasks(): Promise<Task[]> {
-		// Not available on the official API. The sync engine compensates by
-		// probing individual tasks that vanish from a project listing.
-		return [];
+	/**
+	 * Completed tasks drop out of the project listing, so without this a
+	 * completion is indistinguishable from a deletion and costs one direct fetch
+	 * per task that vanished. TickTick returns at most 200 per call.
+	 */
+	async listCompletedTasks(from: Date, to: Date, projectIds?: string[]): Promise<Task[]> {
+		const body: Json = {
+			startDate: toTickTickDate(from.toISOString()),
+			endDate: toTickTickDate(to.toISOString()),
+		};
+
+		// The Inbox is not a real project id here; omitting it widens the query to
+		// every project, which still covers the Inbox.
+		const scoped = projectIds?.filter((id) => id !== INBOX_PROJECT_ID) ?? [];
+		if (scoped.length > 0) body["projectIds"] = scoped;
+
+		const raw = await this.send("POST", "/task/completed", body);
+		return asArray(raw).map(normaliseTask);
 	}
 }
