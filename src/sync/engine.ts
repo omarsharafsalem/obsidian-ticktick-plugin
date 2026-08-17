@@ -211,6 +211,8 @@ export class SyncEngine {
 		};
 
 		const result: LocalNote[] = [];
+		const skipped: string[] = [];
+
 		for (const file of files) {
 			try {
 				const note = await notes.read(file);
@@ -219,6 +221,7 @@ export class SyncEngine {
 				// A note already carrying a task id stays a task whatever else
 				// changed, so an edit to the marker cannot orphan a synced note.
 				if (!parsed.id && markerActive && !matchesMarker(note.frontmatter, marker)) {
+					skipped.push(file.path);
 					continue;
 				}
 
@@ -234,6 +237,19 @@ export class SyncEngine {
 				report.errors.push(`Failed to read ${file.path}: ${describeError(error)}`);
 			}
 		}
+
+		this.deps.log("Scanned local notes", {
+			searchedIn: markerActive && settings.discoverAnywhere ? "whole vault" : settings.taskFolder,
+			markerActive,
+			marker: markerActive ? `${marker.property} = ${marker.value}` : "(none)",
+			filesSeen: files.length,
+			taskNotes: result.length,
+			alreadyLinked: result.filter((note) => note.taskId).length,
+			newAndUnlinked: result.filter((note) => !note.taskId).length,
+			skippedNoMarker: skipped.length,
+			// Only a sample: a whole-vault scan can skip thousands.
+			skippedExamples: skipped.slice(0, 10),
+		});
 
 		return result;
 	}
@@ -518,9 +534,21 @@ export class SyncEngine {
 		for (const note of local) {
 			if (note.taskId) continue;
 			// Skip anything the store already knows by path — it is mid-link.
-			if (store.getByPath(note.file.path)) continue;
+			if (store.getByPath(note.file.path)) {
+				this.deps.log("Not creating a task: already tracked by path", note.file.path);
+				continue;
+			}
+
+			if (!note.snapshot.projectId && !inbox) {
+				report.errors.push(
+					`Cannot create a task from ${note.file.path}: no list to put it in. ` +
+						"Load your lists in settings, or set the note's list property.",
+				);
+				continue;
+			}
 
 			try {
+				this.deps.log("Creating a TickTick task from", note.file.path);
 				const created = await client.createTask(
 					this.toNewTask(note.snapshot, note.snapshot.projectId || inbox || ""),
 				);
