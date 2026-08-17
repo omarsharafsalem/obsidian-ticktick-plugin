@@ -60,6 +60,22 @@ export interface EngineDeps {
 	settings: TickTickSyncSettings;
 	persist: () => Promise<void>;
 	log: (message: string, ...rest: unknown[]) => void;
+	/**
+	 * Asked before anything is deleted. Returning false skips that deletion.
+	 *
+	 * Absent means "go ahead", so a headless run still works; the plugin supplies
+	 * a prompt when the setting is on.
+	 */
+	confirmDeletion?: (request: DeletionRequest) => Promise<boolean>;
+}
+
+/** What is about to be deleted, and the reasoning that led there. */
+export interface DeletionRequest {
+	what: "task" | "note";
+	title: string;
+	/** Plain-language account of why the sync believes this should go. */
+	reason: string;
+	notePath?: string;
 }
 
 interface LocalNote {
@@ -127,7 +143,7 @@ export class SyncEngine {
 			const local = await this.loadLocalNotes(report, projectNames);
 
 			await this.reconcileAll({ remote, local, projectNames, report });
-			await this.createUnlinkedNotes(local, projectNames, report);
+			await this.createUnlinkedNotes(local, remote, projectNames, report);
 
 			this.deps.store.markSynced();
 			await this.deps.persist();
@@ -604,6 +620,17 @@ export class SyncEngine {
 			}
 
 			case "deleteLocal": {
+				const allowed = await this.confirmDeletion(report, {
+					what: "note",
+					title: remoteRecord?.task.title ?? localNote?.file.basename ?? taskId,
+					notePath: localNote?.file.path,
+					reason:
+						"This task is gone from TickTick and the note matches what was last synced, so " +
+						"nothing would be lost by removing it. Keeping notes instead is the usual " +
+						"choice — see 'When a task is deleted in TickTick'.",
+				});
+				if (!allowed) return;
+
 				if (localNote) {
 					await notes.delete(localNote.file);
 					report.deletedLocal++;
@@ -613,6 +640,20 @@ export class SyncEngine {
 			}
 
 			case "deleteRemote": {
+				const missing = entry?.missingPasses ?? 0;
+				const allowed = await this.confirmDeletion(report, {
+					what: "task",
+					title: remoteRecord?.task.title ?? taskId,
+					notePath: entry?.notePath,
+					reason:
+						`The note for this task could not be found. Its recorded location was ` +
+						`"${entry?.notePath ?? "unknown"}", nothing is on disk there, and it has been ` +
+						`missing for ${missing} consecutive sync${missing === 1 ? "" : "s"}. ` +
+						"If you did not delete that note, something stopped it being recognised — " +
+						"most often the task ID property, the task marker, or the folder being scanned.",
+				});
+				if (!allowed) return;
+
 				// Deleting is irreversible from here. One sync should never take out
 				// a whole list, and a rule that stops notes matching would do exactly
 				// that, so past the limit nothing goes and the sync says why.
@@ -640,6 +681,7 @@ export class SyncEngine {
 
 	private async createUnlinkedNotes(
 		local: LocalNote[],
+		remote: Map<string, RemoteRecord>,
 		projectNames: Map<string, string>,
 		report: SyncReport,
 	): Promise<void> {
@@ -649,6 +691,19 @@ export class SyncEngine {
 		const candidates = local.filter(
 			(note) => !note.taskId && !store.getByPath(note.file.path),
 		);
+
+		// Tasks in TickTick that no note claims. A note about to be "created" that
+		// matches one of these is almost certainly the same task that lost its id
+		// rather than a new one — adopting it is what stops a rename, a marker
+		// change or a reset from duplicating a whole list.
+		const claimed = new Set(local.map((note) => note.taskId).filter(Boolean));
+		const unclaimed = new Map<string, Task>();
+		for (const { task } of remote.values()) {
+			if (claimed.has(task.id) || store.get(task.id)) continue;
+			const key = `${task.projectId}::${task.title.trim().toLowerCase()}`;
+			// First one wins; a genuinely duplicated title is ambiguous either way.
+			if (!unclaimed.has(key)) unclaimed.set(key, task);
+		}
 		const cap = settings.maxNewTasksPerSync;
 
 		// Creating tasks is the one operation that multiplies. If a match rule
@@ -674,6 +729,21 @@ export class SyncEngine {
 			// Skip anything the store already knows by path — it is mid-link.
 			if (store.getByPath(note.file.path)) {
 				this.deps.log("Not creating a task: already tracked by path", note.file.path);
+				continue;
+			}
+
+			const wantedList = note.snapshot.projectId || inbox || "";
+			const twin = unclaimed.get(`${wantedList}::${note.snapshot.title.trim().toLowerCase()}`);
+			if (twin) {
+				// Link the two rather than creating a second task. The next pass
+				// reconciles them normally, from the note's own values.
+				await this.stampNote(note.file, twin, note.snapshot, note);
+				store.set(this.entryFor(twin, note.file.path, toSnapshot(twin), Date.now()));
+				unclaimed.delete(`${wantedList}::${note.snapshot.title.trim().toLowerCase()}`);
+				this.deps.log("Adopted an existing task instead of creating a duplicate", {
+					note: note.file.path,
+					taskId: twin.id,
+				});
 				continue;
 			}
 
@@ -772,6 +842,30 @@ export class SyncEngine {
 				privateBody: note?.privateBody,
 			}),
 		);
+	}
+
+	/**
+	 * Puts a deletion to the user, and records the reasoning either way.
+	 *
+	 * The reason is logged whether or not the deletion is allowed, because the
+	 * interesting case is the one that should not have been proposed at all —
+	 * and that is only diagnosable if the reasoning survives.
+	 */
+	private async confirmDeletion(report: SyncReport, request: DeletionRequest): Promise<boolean> {
+		const { settings, confirmDeletion, log } = this.deps;
+		log("Deletion proposed", request);
+
+		if (!settings.confirmDeletions || !confirmDeletion) return true;
+
+		const allowed = await confirmDeletion(request);
+		if (!allowed) {
+			report.errors.push(
+				`Skipped deleting the ${request.what} for "${request.title}" at your request. ${request.reason}`,
+			);
+			log("Deletion declined", request);
+		}
+
+		return allowed;
 	}
 
 	/** Attaches the note's own URL so TickTick's description can link back to it. */

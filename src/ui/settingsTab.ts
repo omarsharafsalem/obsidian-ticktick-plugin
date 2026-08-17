@@ -835,6 +835,20 @@ export class TickTickSettingTab extends PluginSettingTab {
 		root.createEl("h2", { text: "Conflicts" });
 
 		new Setting(root)
+			.setName("Ask before deleting anything")
+			.setDesc(
+				"Shows a prompt naming what would go and why, on either side. Worth leaving on until " +
+					"the plugin has earned your trust — the reason it gives is what makes a wrong " +
+					"deletion diagnosable, and it is written to the debug log either way.",
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(settings.confirmDeletions).onChange(async (value) => {
+					settings.confirmDeletions = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(root)
 			.setName("When a note is missing")
 			.setDesc(
 				"A note can be missing because you deleted it — or because its task ID property was " +

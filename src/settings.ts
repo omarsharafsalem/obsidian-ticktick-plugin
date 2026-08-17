@@ -300,6 +300,15 @@ export interface TickTickSyncSettings {
 	noteDeletion: NoteDeletionPolicy;
 
 	/**
+	 * Ask before anything is deleted, on either side.
+	 *
+	 * On by default while the plugin is still earning trust: a prompt that names
+	 * what is going and why turns a silent mistake into a decision, and the
+	 * reason it gives is what makes the mistake diagnosable afterwards.
+	 */
+	confirmDeletions: boolean;
+
+	/**
 	 * Syncs a note must be missing for before its task may be deleted.
 	 *
 	 * One pass proves nothing — a read can fail, a rule can change. Requiring the
@@ -352,6 +361,7 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	deleteConflictPolicy: "restore",
 	remoteDeletion: "keepNote",
 	noteDeletion: "keepTask",
+	confirmDeletions: true,
 	passesBeforeDeletingTask: 2,
 	completedHandling: "keep",
 	archiveFolder: "Tasks/Archive",

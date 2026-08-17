@@ -2,6 +2,66 @@ import { App, Modal, Setting } from "obsidian";
 import type { SyncReport } from "../sync/engine";
 
 /**
+ * Asks before something is deleted, and says why it was proposed.
+ *
+ * The reason matters more than the question: a deletion that should never have
+ * been suggested is only diagnosable if the reasoning is visible at the moment
+ * it happens, rather than inferred afterwards from what is missing.
+ */
+export class ConfirmDeletionModal extends Modal {
+	private answered = false;
+
+	constructor(
+		app: App,
+		private readonly request: { what: string; title: string; reason: string; notePath?: string },
+		private readonly respond: (allowed: boolean) => void,
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		const { contentEl, request } = this;
+		contentEl.createEl("h3", { text: `Delete this ${request.what}?` });
+		contentEl.createEl("p", { text: request.title, cls: "mod-warning" });
+
+		if (request.notePath) {
+			contentEl.createEl("p", { text: request.notePath, cls: "setting-item-description" });
+		}
+
+		contentEl.createEl("p", { text: "Why the sync thinks so:" });
+		contentEl.createEl("p", { text: request.reason, cls: "setting-item-description" });
+
+		new Setting(contentEl)
+			.addButton((button) =>
+				// Keeping is the safe answer, so it is the one that looks default.
+				button
+					.setButtonText("Keep it")
+					.setCta()
+					.onClick(() => this.answer(false)),
+			)
+			.addButton((button) =>
+				button
+					.setWarning()
+					.setButtonText(`Delete the ${request.what}`)
+					.onClick(() => this.answer(true)),
+			);
+	}
+
+	private answer(allowed: boolean): void {
+		if (this.answered) return;
+		this.answered = true;
+		this.respond(allowed);
+		this.close();
+	}
+
+	onClose(): void {
+		// Closing without choosing must not be read as consent.
+		this.answer(false);
+		this.contentEl.empty();
+	}
+}
+
+/**
  * Shows what a sync would do, without having done any of it.
  *
  * The point of a first run against a real vault is being able to look before

@@ -14,6 +14,7 @@ import { SyncEngine, type SyncReport } from "./sync/engine";
 import { migrateState, SyncStore, type SyncState } from "./sync/state";
 import { NoteRepository, registerPropertyTypes } from "./vault/notes";
 import { TickTickSettingTab } from "./ui/settingsTab";
+import { ConfirmDeletionModal } from "./ui/authModal";
 
 interface PersistedData {
 	settings: TickTickSyncSettings;
@@ -183,6 +184,10 @@ export default class TickTickSyncPlugin extends Plugin {
 			settings: this.settings,
 			persist: () => this.persist(),
 			log: (message, ...rest) => this.log(message, ...rest),
+			confirmDeletion: (request) =>
+				new Promise<boolean>((resolve) => {
+					new ConfirmDeletionModal(this.app, request, resolve).open();
+				}),
 		});
 
 		if (engine.isRunning) return null;
