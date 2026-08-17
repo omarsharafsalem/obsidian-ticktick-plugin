@@ -688,6 +688,16 @@ export class SyncEngine {
 				};
 
 				if (action.kind !== "updateLocal") {
+					// A list change is its own operation. Sending it as part of an
+					// ordinary update is rejected outright, and the task stays put
+					// while the note claims otherwise — so it moves first.
+					const from = remoteRecord.task.projectId;
+					const to = merged.projectId;
+					if (to && from && to !== from) {
+						await client.moveTask(taskId, from, to);
+						this.deps.log("Moved task to another list", { taskId, from, to });
+					}
+
 					await client.updateTask(this.withNoteLink(merged, localNote.file));
 					if (merged.status === "completed" && remoteRecord.task.status !== "completed") {
 						await client.completeTask(merged.projectId, taskId);

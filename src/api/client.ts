@@ -36,6 +36,14 @@ export interface TickTickClient {
 
 	updateTask(task: Task): Promise<Task>;
 
+	/**
+	 * Moves a task to another list.
+	 *
+	 * A separate call because changing `projectId` through an ordinary update is
+	 * rejected — the API answers 500 `unknown_exception` rather than moving it.
+	 */
+	moveTask(taskId: string, fromProjectId: string, toProjectId: string): Promise<void>;
+
 	completeTask(projectId: string, taskId: string): Promise<void>;
 
 	deleteTask(projectId: string, taskId: string): Promise<void>;

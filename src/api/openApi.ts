@@ -317,6 +317,16 @@ export class OpenApiClient implements TickTickClient {
 		return raw ? normaliseTask(raw) : task;
 	}
 
+	async moveTask(taskId: string, fromProjectId: string, toProjectId: string): Promise<void> {
+		if (!fromProjectId || !toProjectId || fromProjectId === toProjectId) return;
+
+		// The endpoint takes an array; one task at a time keeps a failure
+		// attributable to the task that caused it.
+		await this.send("POST", "/task/move", [
+			{ taskId, fromProjectId, toProjectId },
+		] as unknown as Json);
+	}
+
 	async completeTask(projectId: string, taskId: string): Promise<void> {
 		await this.send("POST", `/project/${projectId}/task/${taskId}/complete`);
 	}
