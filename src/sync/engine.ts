@@ -117,6 +117,9 @@ export class SyncEngine {
 	 */
 	private links: TaskLinkIndex = NO_LINKS;
 
+	/** Real project ids that stand for a project listed under a reserved id. */
+	private inboxAliases = new Map<string, string>();
+
 	/** Report what would change and write nothing. Set for the run's duration. */
 	private dryRun = false;
 
@@ -138,7 +141,15 @@ export class SyncEngine {
 		try {
 			const projects = await this.loadProjects();
 			const projectNames = new Map(projects.map((p) => [p.id, p.name]));
+			this.inboxAliases.clear();
 			const remote = await this.loadRemoteTasks(projects, report);
+
+			// Fold in any real id discovered while reading tasks, so a task in the
+			// Inbox resolves to its name and to any folder mapped for it.
+			for (const [realId, listedId] of this.inboxAliases) {
+				const name = projectNames.get(listedId);
+				if (name && !projectNames.has(realId)) projectNames.set(realId, name);
+			}
 			this.links = this.buildLinkIndex(remote, projectNames);
 			const local = await this.loadLocalNotes(report, projectNames);
 
@@ -176,6 +187,12 @@ export class SyncEngine {
 			try {
 				for (const task of await this.deps.client.listTasksInProject(project.id)) {
 					if (!task.id) continue;
+					// The Inbox is listed under a reserved id, but its tasks come back
+					// carrying the account's real one — so nothing downstream matches
+					// and the list shows as a raw id. Teach the map the real one.
+					if (task.projectId !== project.id) {
+						this.inboxAliases.set(task.projectId, project.id);
+					}
 					remote.set(task.id, { task, snapshot: toSnapshot(task) });
 				}
 			} catch (error) {
@@ -490,6 +507,7 @@ export class SyncEngine {
 				deleteConflictPolicy: settings.deleteConflictPolicy,
 				remoteDeletion: settings.remoteDeletion,
 				noteDeletion: settings.noteDeletion,
+				localWasLinked: Boolean(localNote?.taskId),
 				noteConfirmedGone:
 					(store.get(taskId)?.missingPasses ?? 0) >= settings.passesBeforeDeletingTask,
 				baseFields: masked?.baseFields,

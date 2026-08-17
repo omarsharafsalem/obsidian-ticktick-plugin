@@ -52,6 +52,14 @@ export interface ReconcileOptions {
 	/** What to do with the task when its note is missing. */
 	noteDeletion: NoteDeletionPolicy;
 	/**
+	 * Whether the note already carries a task id.
+	 *
+	 * A note that does is not new, whatever the stored state says. Without this,
+	 * clearing the state turns every note whose task has since been deleted into
+	 * a fresh task -- one reset quietly recreating everything that was tidied up.
+	 */
+	localWasLinked?: boolean;
+	/**
 	 * Whether the note's absence has actually been established.
 	 *
 	 * False means "not seen this pass", which is not evidence of anything. Only
@@ -270,7 +278,17 @@ export function reconcile(input: ReconcileInput, options: ReconcileOptions): Syn
 	}
 
 	if (!base) {
-		if (local && !remote) return { kind: "createRemote", snapshot: local };
+		if (local && !remote) {
+			// Carrying an id means this pair was linked before, so a missing task
+			// means the task was deleted — not that the note is new. Creating here
+			// would resurrect everything deleted since the state was last cleared.
+			if (options.localWasLinked) {
+				return options.remoteDeletion === "keepNote"
+					? { kind: "orphanLocal" }
+					: { kind: "deleteLocal" };
+			}
+			return { kind: "createRemote", snapshot: local };
+		}
 		if (remote && !local) return { kind: "createLocal", snapshot: remote };
 		// Both exist but were never synced together — first link-up.
 		const merged = mergeSnapshots(undefined, local!, remote!, options);

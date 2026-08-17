@@ -322,3 +322,40 @@ describe("mergeSnapshots", () => {
 		expect(result.snapshot.content).toBe("local");
 	});
 });
+
+/**
+ * Clearing the sync state must not resurrect work that was tidied away. A note
+ * carrying a task id was linked before, so its task being gone means the task
+ * was deleted — not that the note is new and needs one.
+ */
+describe("reconcile — a note that was linked before", () => {
+	const options: ReconcileOptions = {
+		conflictPolicy: "newest",
+		deleteConflictPolicy: "restore",
+		remoteDeletion: "keepNote",
+		noteDeletion: "keepTask",
+	};
+
+	it("does not create a new task for a note whose task is gone", () => {
+		const action = reconcile({ local: snap() }, { ...options, localWasLinked: true });
+		expect(action.kind).not.toBe("createRemote");
+	});
+
+	it("archives it instead, keeping the note", () => {
+		const action = reconcile({ local: snap() }, { ...options, localWasLinked: true });
+		expect(action.kind).toBe("orphanLocal");
+	});
+
+	it("deletes the note instead when told to mirror TickTick", () => {
+		const action = reconcile(
+			{ local: snap() },
+			{ ...options, localWasLinked: true, remoteDeletion: "deleteNote" },
+		);
+		expect(action.kind).toBe("deleteLocal");
+	});
+
+	it("still creates a task for a note that was never linked", () => {
+		const action = reconcile({ local: snap() }, { ...options, localWasLinked: false });
+		expect(action.kind).toBe("createRemote");
+	});
+});
