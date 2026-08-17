@@ -101,9 +101,6 @@ interface TaskLinkIndex {
 	resolveTaskLink: (target: string) => string | undefined;
 }
 
-/** What a direct fetch could establish about a task that left the listing. */
-type ProbeResult = { state: "present"; task: Task } | { state: "gone" } | { state: "unknown" };
-
 const NO_LINKS: TaskLinkIndex = {
 	contextFor: () => ({}),
 	resolveTaskLink: () => undefined,
@@ -126,6 +123,14 @@ export class SyncEngine {
 	/** Report what would change and write nothing. Set for the run's duration. */
 	private dryRun = false;
 
+	/**
+	 * Whether the completed-task list was read successfully this pass.
+	 *
+	 * It is what makes a missing task readable as deleted rather than finished.
+	 * Without it nothing may be concluded from absence at all.
+	 */
+	private completedFetched = false;
+
 	constructor(private readonly deps: EngineDeps) {}
 
 	get isRunning(): boolean {
@@ -145,6 +150,7 @@ export class SyncEngine {
 			const projects = await this.loadProjects();
 			const projectNames = new Map(projects.map((p) => [p.id, p.name]));
 			this.inboxAliases.clear();
+			this.completedFetched = false;
 			const remote = await this.loadRemoteTasks(projects, report);
 
 			// Fold in any real id discovered while reading tasks, so a task in the
@@ -203,10 +209,15 @@ export class SyncEngine {
 			}
 		}
 
-		// Completed tasks drop out of the project listing. Where the backend can
-		// report them we fold them back in, which is what lets a completion sync
-		// through instead of looking like a deletion.
-		if (this.deps.settings.syncCompletedTasks && this.deps.client.capabilities.completedHistory) {
+		// Completed tasks drop out of the project listing, so they are always
+		// fetched — not because they are wanted as notes, but because they are the
+		// evidence that separates "completed" from "deleted". Without them, a task
+		// missing from the listing is ambiguous, and the direct fetch cannot settle
+		// it: TickTick deletes to a trash and serves trashed tasks like live ones.
+		//
+		// Whether a completed task also *becomes* a note is a separate question,
+		// answered in reconcileOne.
+		if (this.deps.client.capabilities.completedHistory) {
 			try {
 				const to = new Date();
 				const from = new Date(to.getTime() - 90 * 24 * 60 * 60 * 1000);
@@ -220,6 +231,7 @@ export class SyncEngine {
 						remote.set(task.id, { task, snapshot: toSnapshot(task) });
 					}
 				}
+				this.completedFetched = true;
 			} catch (error) {
 				report.errors.push(`Failed to read completed tasks: ${describeError(error)}`);
 			}
@@ -503,30 +515,31 @@ export class SyncEngine {
 			return;
 		}
 
-		// A tracked task missing from the listing is either completed or deleted,
-		// and a direct fetch is the only way to tell on the official API.
+		// A tracked task missing from both the open and completed listings has been
+		// deleted. That conclusion is only available because completed tasks are
+		// always fetched: a direct fetch cannot settle it, since TickTick serves
+		// trashed tasks exactly like live ones.
 		//
-		// Only worth asking while the note still exists, because the answer only
-		// decides what happens to that note. With the note gone as well there is
-		// nothing to create, change or delete — and asking anyway is harmful:
-		// TickTick deletes to a trash, so a deleted task still answers the fetch,
-		// which reads as "still there" and restores the note the user removed.
-		if (!remoteRecord && entry && localNote) {
-			const probed = await this.probeRemote(entry);
+		// If the completed list could not be read, absence proves nothing and the
+		// task is left entirely alone.
+		if (!remoteRecord && entry && localNote && !this.completedFetched) {
+			report.errors.push(
+				`Could not read completed tasks, so "${entry.notePath}" was left untouched — its task ` +
+					"may have been finished rather than deleted.",
+			);
+			return;
+		}
 
-			// Unknown is not "gone" and not "still there". Skipping is the only
-			// answer that cannot invent a task or destroy one.
-			if (probed.state === "unknown") {
-				report.errors.push(
-					`Could not check whether "${entry.notePath}" still exists in TickTick, so it was ` +
-						"left untouched. Nothing was created, changed or deleted for it.",
-				);
-				return;
-			}
-
-			if (probed.state === "present") {
-				remoteRecord = { task: probed.task, snapshot: toSnapshot(probed.task) };
-			}
+		// Completed tasks are fetched for evidence. Turning one into a note is a
+		// different question, and off by default: a first sync should not backfill
+		// months of finished work nobody asked for.
+		if (
+			!localNote &&
+			!entry &&
+			remoteRecord?.task.status === "completed" &&
+			!settings.syncCompletedTasks
+		) {
+			return;
 		}
 
 		const base = entry?.base;
@@ -568,31 +581,6 @@ export class SyncEngine {
 			projectNames,
 			report,
 		});
-	}
-
-	/**
-	 * Asks TickTick directly whether a task that left the listing still exists.
-	 *
-	 * Three answers, and the third one matters: a failed probe means *unknown*,
-	 * not present. This used to invent a task from the last-agreed state so that
-	 * a transient failure could not delete a note — but an invented task looks
-	 * exactly like a real one, so a task deleted in TickTick was resurrected on
-	 * every sync, and each resurrection wrote another copy of the note.
-	 *
-	 * Doing nothing is the only safe answer to a question that did not get one.
-	 */
-	private async probeRemote(entry: SyncEntry): Promise<ProbeResult> {
-		try {
-			const task = await this.deps.client.getTask(entry.projectId, entry.taskId);
-			return task ? { state: "present", task } : { state: "gone" };
-		} catch (error) {
-			this.deps.log("Probe failed; leaving this task alone", {
-				taskId: entry.taskId,
-				projectId: entry.projectId,
-				error: describeError(error),
-			});
-			return { state: "unknown" };
-		}
 	}
 
 	private async execute(context: {
