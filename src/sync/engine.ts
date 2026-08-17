@@ -163,6 +163,12 @@ export class SyncEngine {
 			this.links = this.buildLinkIndex(remote, projectNames);
 			const local = await this.loadLocalNotes(report, projectNames);
 
+			// Before anything else: give a note that has lost its id back the task
+			// it belongs to. Left until later, reconcile sees an orphaned task and
+			// restores a second note for it, while the note itself looks new and
+			// gets a second task — one broken property becoming two duplicates.
+			await this.adoptOrphanedTasks(local, remote, report);
+
 			await this.reconcileAll({
 				remote,
 				local,
@@ -788,6 +794,61 @@ export class SyncEngine {
 
 	// --- Writing ------------------------------------------------------------
 
+	/**
+	 * Reunites a note that has lost its task id with the task it belongs to.
+	 *
+	 * A note stops being recognised for several ordinary reasons — the id
+	 * property renamed, a settings change, a hand edit — and every one of them
+	 * makes it look brand new while leaving its task looking abandoned. Matching
+	 * on title within the same list links them back before either half is acted
+	 * on, which is the difference between a no-op and a pair of duplicates.
+	 */
+	private async adoptOrphanedTasks(
+		local: LocalNote[],
+		remote: Map<string, RemoteRecord>,
+		report: SyncReport,
+	): Promise<void> {
+		const { store } = this.deps;
+
+		const orphans = local.filter((note) => !note.taskId && !store.getByPath(note.file.path));
+		if (orphans.length === 0) return;
+
+		// Claimed by a note found this pass — not merely tracked. A task whose
+		// note has gone missing is precisely what needs adopting, so having a
+		// stored entry must not disqualify it.
+		const claimed = new Set(local.map((note) => note.taskId).filter(Boolean));
+		const available = new Map<string, Task>();
+		for (const { task } of remote.values()) {
+			if (claimed.has(task.id)) continue;
+			const key = `${task.projectId}::${task.title.trim().toLowerCase()}`;
+			if (!available.has(key)) available.set(key, task);
+		}
+
+		for (const note of orphans) {
+			const key = `${note.snapshot.projectId}::${note.snapshot.title.trim().toLowerCase()}`;
+			const twin = available.get(key);
+			if (!twin) continue;
+
+			available.delete(key);
+			if (this.dryRun) {
+				report.planned.push(`Re-link ${note.file.path} to its existing task "${twin.title}"`);
+				continue;
+			}
+
+			await this.stampNote(note.file, twin, note.snapshot, note);
+			store.set(this.entryFor(twin, note.file.path, toSnapshot(twin), Date.now()));
+
+			// So the reconcile pass treats the pair as matched rather than as an
+			// orphaned task and an unrelated new note.
+			note.taskId = twin.id;
+
+			this.deps.log("Re-linked a note to its existing task", {
+				note: note.file.path,
+				taskId: twin.id,
+			});
+		}
+	}
+
 	private async createUnlinkedNotes(
 		local: LocalNote[],
 		remote: Map<string, RemoteRecord>,
@@ -808,7 +869,7 @@ export class SyncEngine {
 		const claimed = new Set(local.map((note) => note.taskId).filter(Boolean));
 		const unclaimed = new Map<string, Task>();
 		for (const { task } of remote.values()) {
-			if (claimed.has(task.id) || store.get(task.id)) continue;
+			if (claimed.has(task.id)) continue;
 			const key = `${task.projectId}::${task.title.trim().toLowerCase()}`;
 			// First one wins; a genuinely duplicated title is ambiguous either way.
 			if (!unclaimed.has(key)) unclaimed.set(key, task);
