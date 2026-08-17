@@ -17,6 +17,38 @@ export class ApiError extends Error {
 	get isAuthFailure(): boolean {
 		return this.status === 401 || this.status === 403;
 	}
+
+	/** True when the failure is about the credentials themselves. */
+	get isCredentialFailure(): boolean {
+		return isPermanentFailure(this.body);
+	}
+
+	/** True when TickTick has temporarily barred further sign-in attempts. */
+	get isLockout(): boolean {
+		return this.body.toLowerCase().includes("too_many_times");
+	}
+}
+
+/**
+ * TickTick answers application-level failures with HTTP 500 rather than a 4xx.
+ * A blanket "retry every 5xx" therefore turns one wrong password into
+ * `maxRetries + 1` sign-in attempts, which trips TickTick's account lockout
+ * after a couple of clicks. Retrying any of these cannot succeed, and for the
+ * credential ones it actively causes harm.
+ */
+const PERMANENT_ERROR_CODES = [
+	"incorrect_password_too_many_times",
+	"incorrect_password",
+	"username_password_not_match",
+	"user_not_exist",
+	"account_locked",
+	"need_captcha",
+];
+
+function isPermanentFailure(body: string): boolean {
+	if (!body) return false;
+	const lowered = body.toLowerCase();
+	return PERMANENT_ERROR_CODES.some((code) => lowered.includes(code));
 }
 
 export interface HttpQueueOptions {
@@ -26,6 +58,15 @@ export interface HttpQueueOptions {
 	minIntervalMs: number;
 	/** How many times to retry a 429/5xx before giving up. */
 	maxRetries: number;
+}
+
+export interface RequestOptions {
+	/**
+	 * Overrides the queue's retry budget for a single call. Zero means one
+	 * attempt only — what authentication needs, since every retry counts as a
+	 * fresh sign-in attempt against the account.
+	 */
+	maxRetries?: number;
 }
 
 export const DEFAULT_QUEUE_OPTIONS: HttpQueueOptions = {
@@ -51,19 +92,25 @@ export class HttpQueue {
 
 	constructor(private readonly options: HttpQueueOptions = DEFAULT_QUEUE_OPTIONS) {}
 
-	async request(params: RequestUrlParam): Promise<RequestUrlResponse> {
+	async request(
+		params: RequestUrlParam,
+		options: RequestOptions = {},
+	): Promise<RequestUrlResponse> {
 		await this.acquire();
 		try {
-			return await this.executeWithRetry(params);
+			return await this.executeWithRetry(params, options.maxRetries ?? this.options.maxRetries);
 		} finally {
 			this.release();
 		}
 	}
 
-	private async executeWithRetry(params: RequestUrlParam): Promise<RequestUrlResponse> {
+	private async executeWithRetry(
+		params: RequestUrlParam,
+		maxRetries: number,
+	): Promise<RequestUrlResponse> {
 		let lastError: unknown;
 
-		for (let attempt = 0; attempt <= this.options.maxRetries; attempt++) {
+		for (let attempt = 0; attempt <= maxRetries; attempt++) {
 			if (attempt > 0) {
 				// Exponential backoff with a conservative ceiling.
 				await sleep(Math.min(1000 * 2 ** (attempt - 1), 16_000));
@@ -85,7 +132,11 @@ export class HttpQueue {
 			}
 
 			if (response.status === 429 || response.status >= 500) {
-				lastError = new ApiError(response.status, params.url, response.text ?? "");
+				const error = new ApiError(response.status, params.url, response.text ?? "");
+				// A 500 that names a credential problem is final, not transient.
+				// Retrying it is what escalates a typo into a locked account.
+				if (error.isCredentialFailure) throw error;
+				lastError = error;
 				continue;
 			}
 

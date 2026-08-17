@@ -1,6 +1,7 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type TickTickSyncPlugin from "../main";
 import { SYNCED_FIELDS, type Project, type SyncedField } from "../api/types";
+import { ApiError } from "../api/http";
 import { v2SignOn } from "../api/v2";
 import { awaitLoopbackCode, exchangeAuthCode, extractAuthCode, randomState } from "../auth/oauth";
 import { DEFAULT_PROPERTIES, type FieldSyncMode, type PropertyNames } from "../settings";
@@ -37,6 +38,26 @@ const PROPERTY_LABELS: Record<keyof PropertyNames, string> = {
 	completed: "Completed at",
 	parent: "Parent task",
 };
+
+/**
+ * Turns a sign-on failure into something actionable. TickTick reports both a
+ * wrong password and a lockout as HTTP 500, so the raw message is a wall of
+ * JSON that does not say what to do next.
+ */
+function signInFailureMessage(error: unknown): string {
+	if (error instanceof ApiError && error.isLockout) {
+		return (
+			"TickTick has temporarily blocked sign-in after too many failed attempts. " +
+			"Wait before trying again, and check the password by signing in at ticktick.com first."
+		);
+	}
+
+	if (error instanceof ApiError && error.isCredentialFailure) {
+		return "TickTick rejected that email or password. Check them at ticktick.com, then try again.";
+	}
+
+	return `Sign-in failed: ${error instanceof Error ? error.message : String(error)}`;
+}
 
 export class TickTickSettingTab extends PluginSettingTab {
 	/** Lists fetched from TickTick, cached so the tab can redraw without refetching. */
@@ -239,9 +260,7 @@ export class TickTickSettingTab extends PluginSettingTab {
 					new Notice("Signed in to TickTick.");
 					this.display();
 				} catch (error) {
-					new Notice(
-						`Sign-in failed: ${error instanceof Error ? error.message : String(error)}`,
-					);
+					new Notice(signInFailureMessage(error), 15_000);
 				}
 			})();
 		}).open();

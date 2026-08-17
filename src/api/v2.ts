@@ -52,16 +52,22 @@ export async function v2SignOn(
 	username: string,
 	password: string,
 ): Promise<V2Session> {
-	const response = await queue.request({
-		url: `${V2_BASE}/user/signon?wc=true&remember=true`,
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			"x-device":
-				'{"platform":"web","os":"obsidian","device":"obsidian-ticktick-sync","version":1}',
+	const response = await queue.request(
+		{
+			url: `${V2_BASE}/user/signon?wc=true&remember=true`,
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				"x-device":
+					'{"platform":"web","os":"obsidian","device":"obsidian-ticktick-sync","version":1}',
+			},
+			body: JSON.stringify({ username, password }),
 		},
-		body: JSON.stringify({ username, password }),
-	});
+		// Never retry a sign-in: TickTick counts each attempt against the account
+		// and locks it after a handful, so a retry loop turns one typo into a
+		// lockout. The user retries by pressing the button again.
+		{ maxRetries: 0 },
+	);
 
 	const payload = (response.json ?? {}) as Json;
 	const token = payload["token"];
