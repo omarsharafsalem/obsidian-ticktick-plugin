@@ -136,6 +136,13 @@ export interface MapperOptions {
 	marker?: { property: string; value: string };
 	/** Ends the synced part of the body; everything after it is untouched. */
 	syncedRegionMarker?: string;
+	/**
+	 * Show times on the task's own clock rather than this machine's.
+	 *
+	 * Off by default: the zone TickTick tags a task with is frequently a stale
+	 * account setting, and honouring it then shifts every time by hours.
+	 */
+	useTaskTimeZone?: boolean;
 }
 
 export const DEFAULT_MAPPER_OPTIONS: MapperOptions = {
@@ -387,10 +394,11 @@ export function taskToNote(
 	const marker = options.marker;
 	if (marker?.property.trim()) frontmatter[marker.property.trim()] = marker.value;
 
-	const due = toFrontmatterDate(task.dueDate, task.isAllDay, task.timeZone);
+	const displayZone = options.useTaskTimeZone ? task.timeZone : undefined;
+	const due = toFrontmatterDate(task.dueDate, task.isAllDay, displayZone);
 	if (due) frontmatter[p.due] = due;
 
-	const start = toFrontmatterDate(task.startDate, task.isAllDay, task.timeZone);
+	const start = toFrontmatterDate(task.startDate, task.isAllDay, displayZone);
 	if (start) frontmatter[p.start] = start;
 
 	// Written bare, without '#', which is what Obsidian's tags property expects.

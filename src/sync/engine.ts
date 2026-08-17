@@ -970,6 +970,7 @@ export class SyncEngine {
 				labels: settings.labels,
 				marker: settings.taskMarker,
 				syncedRegionMarker: settings.syncedRegionMarker,
+				useTaskTimeZone: settings.showTimesIn === "task",
 			},
 			{ ...this.links.contextFor(task), ...note },
 		);

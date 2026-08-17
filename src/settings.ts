@@ -277,6 +277,17 @@ export interface TickTickSyncSettings {
 	 */
 	dateProperties: "date" | "datetime";
 
+	/**
+	 * Whose clock a time is shown on.
+	 *
+	 * "local" uses the machine reading the vault. "task" uses the zone TickTick
+	 * tagged the task with — which sounds more correct but is often a stale
+	 * account setting from wherever the account was last used, and a wrong zone
+	 * shifts every time by hours. Local is the default because the person
+	 * reading the note is the one whose clock matters.
+	 */
+	showTimesIn: "local" | "task";
+
 	properties: PropertyNames;
 	/** The vocabulary those properties use. See {@link ValueLabels}. */
 	labels: ValueLabels;
@@ -354,6 +365,7 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	syncedRegionMarker: "<!-- ticktick:end -->",
 	linkBackToNote: true,
 	dateProperties: "datetime",
+	showTimesIn: "local",
 	maxNewTasksPerSync: 20,
 	maxDeletedTasksPerSync: 10,
 	syncCompletedTasks: false,

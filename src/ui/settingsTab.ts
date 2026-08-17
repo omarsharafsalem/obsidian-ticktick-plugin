@@ -779,6 +779,24 @@ export class TickTickSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(root)
+			.setName("Show times on")
+			.setDesc(
+				"Whose clock a due time is written on. TickTick tags each task with a timezone, but that " +
+					"is often a stale account setting from wherever the account was last used — and a wrong " +
+					"one shifts every time by hours. Your own clock is the default, since you are the one " +
+					"reading the note. All-day tasks are unaffected either way.",
+			)
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions({ local: "My timezone", task: "The task's timezone" })
+					.setValue(settings.showTimesIn)
+					.onChange(async (value) => {
+						settings.showTimesIn = value as typeof settings.showTimesIn;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(root)
 			.setName("Register property types")
 			.setDesc(
 				"Tell Obsidian that dates are dates and tags are tags, so the Properties panel shows a " +
