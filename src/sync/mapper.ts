@@ -289,24 +289,25 @@ function itemKey(title: string): string {
 }
 
 /**
- * Re-attaches remote checklist item ids to items parsed out of a note.
+ * Restores everything a note cannot hold about a checklist item.
  *
  * A note renders subtasks as plain `- [ ] title` lines, so a checklist read
- * back out of one carries no ids. Pushing that shape makes TickTick treat every
- * item as new, which deletes and recreates the subtasks and loses their
- * per-item completion times. Matching on title first and falling back to
- * position keeps identity across both reordering and renaming.
+ * back out of one carries only a title and a tick. Pushing that shape makes
+ * TickTick treat every item as new — deleting and recreating the subtasks —
+ * and blanks each item's dates and completion time. Matching on title first and
+ * falling back to position keeps identity across both reordering and renaming.
  *
- * Item ids are deliberately absent from the note itself: they are server
- * bookkeeping, and `fieldsEqual` in reconcile.ts already compares items on
- * title and completion alone, so carrying them here changes no merge decision.
+ * None of this is written into the note: it is server bookkeeping, and
+ * `fieldsEqual` in reconcile.ts compares items on title and completion alone,
+ * so carrying it changes no merge decision. `sortOrder` is deliberately *not*
+ * restored — the order of the lines in the note is the user's intent.
  */
-export function reattachItemIds(
+export function restoreItemMetadata(
 	items: ChecklistItem[],
 	reference: ChecklistItem[],
 ): ChecklistItem[] {
 	const taken: boolean[] = new Array(reference.length).fill(false);
-	const resolved: (string | undefined)[] = new Array(items.length).fill(undefined);
+	const resolved: (ChecklistItem | undefined)[] = new Array(items.length).fill(undefined);
 
 	const byTitle = new Map<string, number[]>();
 	reference.forEach((item, index) => {
@@ -319,27 +320,38 @@ export function reattachItemIds(
 	// Pass 1: identical titles, in order, so duplicate titles keep their own ids.
 	items.forEach((item, i) => {
 		if (item.id) {
-			resolved[i] = item.id;
+			resolved[i] = item;
 			return;
 		}
 		const match = byTitle.get(itemKey(item.title))?.find((index) => !taken[index]);
 		if (match === undefined) return;
 		taken[match] = true;
-		resolved[i] = reference[match].id;
+		resolved[i] = reference[match];
 	});
 
-	// Pass 2: positional fallback, which carries a renamed item's id through.
+	// Pass 2: positional fallback, which carries a renamed item's metadata through.
 	items.forEach((_item, i) => {
 		if (resolved[i] !== undefined) return;
 		const candidate = reference[i];
 		if (!candidate?.id || taken[i]) return;
 		taken[i] = true;
-		resolved[i] = candidate.id;
+		resolved[i] = candidate;
 	});
 
 	return items.map((item, i) => {
-		const id = resolved[i];
-		return id === undefined ? item : { ...item, id };
+		const source = resolved[i];
+		if (source === undefined) return item;
+
+		// Title and completion come from the note, which is what the user edited.
+		// Everything else is server state the note could not have expressed.
+		return {
+			...item,
+			id: source.id,
+			startDate: source.startDate,
+			isAllDay: source.isAllDay,
+			timeZone: source.timeZone,
+			completedTime: source.completedTime,
+		};
 	});
 }
 

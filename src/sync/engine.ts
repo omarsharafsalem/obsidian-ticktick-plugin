@@ -4,7 +4,7 @@ import { blankTask, type NewTask, type Project, type Task } from "../api/types";
 import type { TickTickSyncSettings } from "../settings";
 import { NoteRepository, taskNotePath } from "../vault/notes";
 import { applyFieldModes } from "./fieldModes";
-import { noteToTask, parsedNoteToTask, reattachItemIds, taskToNote } from "./mapper";
+import { noteToTask, parsedNoteToTask, restoreItemMetadata, taskToNote } from "./mapper";
 import { reconcile, toSnapshot, type SyncAction, type TaskSnapshot } from "./reconcile";
 import type { SyncEntry, SyncStore } from "./state";
 
@@ -340,7 +340,7 @@ export class SyncEngine {
 					...remoteRecord.task,
 					...action.snapshot,
 					id: taskId,
-					items: reattachItemIds(action.snapshot.items, remoteRecord.task.items),
+					items: restoreItemMetadata(action.snapshot.items, remoteRecord.task.items),
 				};
 
 				if (action.kind !== "updateLocal") {

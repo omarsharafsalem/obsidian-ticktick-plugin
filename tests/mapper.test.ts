@@ -5,7 +5,7 @@ import {
 	buildBody,
 	noteToTask,
 	parsedNoteToTask,
-	reattachItemIds,
+	restoreItemMetadata,
 	sanitiseFilename,
 	splitBody,
 	taskToNote,
@@ -195,16 +195,45 @@ describe("round trip", () => {
 		]);
 		// Re-attaching against the remote task is what restores full identity,
 		// so an update edits the existing items instead of recreating them.
-		expect(reattachItemIds(restored.items, original.items)).toEqual(original.items);
+		expect(restoreItemMetadata(restored.items, original.items)).toEqual(original.items);
 	});
 });
 
-describe("reattachItemIds", () => {
+describe("restoreItemMetadata", () => {
 	const remote = [
 		{ id: "i1", title: "oat", completed: false },
 		{ id: "i2", title: "soy", completed: false },
 		{ id: "i3", title: "almond", completed: false },
 	];
+
+	it("restores the per-item dates a note cannot express", () => {
+		const dated = [
+			{
+				id: "i1",
+				title: "oat",
+				completed: true,
+				startDate: "2026-08-20T09:00:00.000Z",
+				isAllDay: false,
+				timeZone: "Europe/London",
+				completedTime: "2026-08-21T11:00:00.000Z",
+			},
+		];
+		// What splitBody gives back: a title and a tick, nothing else.
+		const parsed = [{ title: "oat", completed: true }];
+
+		expect(restoreItemMetadata(parsed, dated)[0]).toEqual(dated[0]);
+	});
+
+	it("takes title and completion from the note, not the remote item", () => {
+		const dated = [
+			{ id: "i1", title: "oat", completed: false, startDate: "2026-08-20T09:00:00.000Z" },
+		];
+		const parsed = [{ title: "oat", completed: true }];
+
+		const [restored] = restoreItemMetadata(parsed, dated);
+		expect(restored.completed).toBe(true);
+		expect(restored.startDate).toBe("2026-08-20T09:00:00.000Z");
+	});
 
 	it("restores ids for items that kept their titles", () => {
 		const parsed = [
@@ -213,7 +242,7 @@ describe("reattachItemIds", () => {
 			{ title: "almond", completed: false },
 		];
 
-		expect(reattachItemIds(parsed, remote).map((item) => item.id)).toEqual(["i1", "i2", "i3"]);
+		expect(restoreItemMetadata(parsed, remote).map((item) => item.id)).toEqual(["i1", "i2", "i3"]);
 	});
 
 	it("follows the title when items are reordered", () => {
@@ -223,7 +252,7 @@ describe("reattachItemIds", () => {
 			{ title: "soy", completed: false },
 		];
 
-		expect(reattachItemIds(parsed, remote).map((item) => item.id)).toEqual(["i3", "i1", "i2"]);
+		expect(restoreItemMetadata(parsed, remote).map((item) => item.id)).toEqual(["i3", "i1", "i2"]);
 	});
 
 	it("falls back to position so a renamed item keeps its id", () => {
@@ -233,7 +262,7 @@ describe("reattachItemIds", () => {
 			{ title: "almond", completed: false },
 		];
 
-		expect(reattachItemIds(parsed, remote).map((item) => item.id)).toEqual(["i1", "i2", "i3"]);
+		expect(restoreItemMetadata(parsed, remote).map((item) => item.id)).toEqual(["i1", "i2", "i3"]);
 	});
 
 	it("leaves genuinely new items without an id", () => {
@@ -244,7 +273,7 @@ describe("reattachItemIds", () => {
 			{ title: "hazelnut", completed: false },
 		];
 
-		expect(reattachItemIds(parsed, remote).map((item) => item.id)).toEqual([
+		expect(restoreItemMetadata(parsed, remote).map((item) => item.id)).toEqual([
 			"i1",
 			"i2",
 			"i3",
@@ -262,22 +291,22 @@ describe("reattachItemIds", () => {
 			{ title: "call", completed: false },
 		];
 
-		expect(reattachItemIds(parsed, duplicated).map((item) => item.id)).toEqual(["a", "b"]);
+		expect(restoreItemMetadata(parsed, duplicated).map((item) => item.id)).toEqual(["a", "b"]);
 	});
 
 	it("does not invent ids when the task had no items before", () => {
 		const parsed = [{ title: "first subtask", completed: false }];
-		expect(reattachItemIds(parsed, [])).toEqual(parsed);
+		expect(restoreItemMetadata(parsed, [])).toEqual(parsed);
 	});
 
 	it("matches titles ignoring surrounding whitespace and case", () => {
 		const parsed = [{ title: "  OAT  ", completed: false }];
-		expect(reattachItemIds(parsed, remote)[0].id).toBe("i1");
+		expect(restoreItemMetadata(parsed, remote)[0].id).toBe("i1");
 	});
 
 	it("keeps an id the item already carries", () => {
 		const parsed = [{ id: "explicit", title: "oat", completed: false }];
-		expect(reattachItemIds(parsed, remote)[0].id).toBe("explicit");
+		expect(restoreItemMetadata(parsed, remote)[0].id).toBe("explicit");
 	});
 });
 

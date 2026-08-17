@@ -21,6 +21,17 @@ export interface ChecklistItem {
 	id?: string;
 	title: string;
 	completed: boolean;
+
+	// A note renders an item as a plain `- [ ] title` line, so everything below
+	// is invisible to it. These are restored from the remote task on the way out
+	// rather than being written into the note — see `restoreItemMetadata`.
+	// Without that, pushing a note would blank every subtask's dates.
+	/** ISO 8601 UTC. */
+	startDate?: string;
+	isAllDay?: boolean;
+	timeZone?: string;
+	/** ISO 8601 UTC. */
+	completedTime?: string;
 }
 
 export interface Task {

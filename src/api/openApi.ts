@@ -47,6 +47,10 @@ export function normaliseChecklistItem(raw: unknown): ChecklistItem {
 		id: asString(item["id"]),
 		title: asString(item["title"]) ?? "",
 		completed: item["status"] === 1 || item["status"] === 2,
+		startDate: fromTickTickDate(item["startDate"]),
+		isAllDay: item["isAllDay"] === true ? true : undefined,
+		timeZone: asString(item["timeZone"]),
+		completedTime: fromTickTickDate(item["completedTime"]),
 	};
 }
 
@@ -139,12 +143,25 @@ export function serialiseTask(task: NewTask & { id?: string }): Json {
 	if (start) body["startDate"] = start;
 
 	if (task.items.length > 0) {
-		body["items"] = task.items.map((item, index) => ({
-			...(item.id ? { id: item.id } : {}),
-			title: item.title,
-			status: item.completed ? 1 : 0,
-			sortOrder: index,
-		}));
+		// sortOrder follows the note's ordering rather than whatever the server
+		// had, because the order of the checkbox lines is the user's intent.
+		body["items"] = task.items.map((item, index) => {
+			const wire: Json = {
+				...(item.id ? { id: item.id } : {}),
+				title: item.title,
+				status: item.completed ? 1 : 0,
+				sortOrder: index,
+			};
+
+			const start = toTickTickDate(item.startDate);
+			if (start) wire["startDate"] = start;
+			if (item.isAllDay !== undefined) wire["isAllDay"] = item.isAllDay;
+			if (item.timeZone) wire["timeZone"] = item.timeZone;
+			const completed = toTickTickDate(item.completedTime);
+			if (completed) wire["completedTime"] = completed;
+
+			return wire;
+		});
 	}
 
 	return body;
