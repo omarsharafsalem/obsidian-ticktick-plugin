@@ -655,5 +655,50 @@ export class TickTickSettingTab extends PluginSettingTab {
 						new Notice("Sync state reset.");
 					}),
 			);
+
+		new Setting(root)
+			.setName("Rebuild every note")
+			.setDesc(
+				"For testing a change to the mapping: deletes the notes this plugin created, forgets the " +
+					"sync state, and pulls everything again from scratch. Only notes carrying a task ID are " +
+					"touched, and they go to your trash rather than being erased. Nothing is deleted in " +
+					"TickTick.",
+			)
+			.addButton((button) => {
+				let armed = false;
+
+				button
+					.setWarning()
+					.setButtonText("Rebuild")
+					.onClick(async () => {
+						// Two-step rather than a modal: the first press only arms it, so a
+						// stray click on a destructive action cannot do anything.
+						if (!armed) {
+							armed = true;
+							button.setButtonText("Click again to confirm");
+							window.setTimeout(() => {
+								armed = false;
+								button.setButtonText("Rebuild");
+							}, 5000);
+							return;
+						}
+
+						button.setDisabled(true).setButtonText("Rebuilding…");
+						try {
+							const removed = await this.plugin.deleteSyncedNotes();
+							this.plugin.store = new SyncStore(emptyState());
+							await this.plugin.persist();
+							new Notice(`Removed ${removed} note${removed === 1 ? "" : "s"}. Syncing…`);
+							await this.plugin.runSync();
+						} catch (error) {
+							new Notice(
+								`Rebuild failed: ${error instanceof Error ? error.message : String(error)}`,
+							);
+						} finally {
+							armed = false;
+							button.setDisabled(false).setButtonText("Rebuild");
+						}
+					});
+			});
 	}
 }

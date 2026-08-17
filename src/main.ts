@@ -145,6 +145,29 @@ export default class TickTickSyncPlugin extends Plugin {
 		});
 	}
 
+	/**
+	 * Trashes every note this plugin created, and reports how many.
+	 *
+	 * A note counts as ours only if it carries the task-ID property, so anything
+	 * hand-written in the same folder is left alone. Files go to the trash rather
+	 * than being erased, and nothing is sent to TickTick — this is a local reset
+	 * for re-testing the mapping from a clean slate.
+	 */
+	async deleteSyncedNotes(): Promise<number> {
+		const notes = new NoteRepository(this.app, this.settings.properties);
+		const idProperty = this.settings.properties.id;
+		let removed = 0;
+
+		for (const file of notes.listMarkdown(this.settings.taskFolder)) {
+			const cache = this.app.metadataCache.getFileCache(file);
+			if (!cache?.frontmatter?.[idProperty]) continue;
+			await notes.delete(file);
+			removed++;
+		}
+
+		return removed;
+	}
+
 	// --- Syncing ------------------------------------------------------------
 
 	async runSync(options: { silent?: boolean } = {}): Promise<SyncReport | null> {
