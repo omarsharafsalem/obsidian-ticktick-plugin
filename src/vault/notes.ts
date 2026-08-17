@@ -92,8 +92,24 @@ export class NoteRepository {
 
 	async create(path: string, note: NoteContent): Promise<TFile> {
 		await this.ensureFolder(parentFolder(path));
-		const target = await this.uniquePath(path);
-		return this.app.vault.create(target, joinFrontmatter(note));
+		const body = joinFrontmatter(note);
+		let target = await this.uniquePath(path);
+
+		// uniquePath asks Obsidian's index, which does not always agree with the
+		// filesystem: macOS is case-insensitive while the index is not, and a title
+		// carrying emoji or accents can be normalised differently on disk. Rather
+		// than predict which, take the rejection as proof the name is taken and
+		// step to the next one.
+		for (let attempt = 0; attempt < 25; attempt++) {
+			try {
+				return await this.app.vault.create(target, body);
+			} catch (error) {
+				if (!isAlreadyExists(error)) throw error;
+				target = nextCandidate(target);
+			}
+		}
+
+		throw new Error(`Could not find a free filename for ${path}`);
 	}
 
 	async rename(file: TFile, path: string): Promise<TFile> {
@@ -142,15 +158,38 @@ export class NoteRepository {
 	/** Appends a numeric suffix when the desired path is taken. */
 	private async uniquePath(path: string): Promise<string> {
 		const normalised = normalizePath(path);
-		if (!this.app.vault.getAbstractFileByPath(normalised)) return normalised;
+
+		// Compared case- and Unicode-insensitively, because the filesystem is:
+		// on macOS "Buy Milk.md" and "buy milk.md" are the same file, and an
+		// accented title can be stored decomposed while the index holds it composed.
+		const taken = new Set(
+			this.app.vault.getFiles().map((file) => file.path.normalize("NFC").toLowerCase()),
+		);
+		const isTaken = (candidate: string): boolean =>
+			taken.has(candidate.normalize("NFC").toLowerCase());
+
+		if (!isTaken(normalised)) return normalised;
 
 		const withoutExt = normalised.replace(/\.md$/, "");
 		for (let n = 2; n < 1000; n++) {
 			const candidate = `${withoutExt} ${n}.md`;
-			if (!this.app.vault.getAbstractFileByPath(candidate)) return candidate;
+			if (!isTaken(candidate)) return candidate;
 		}
 		return `${withoutExt} ${Date.now()}.md`;
 	}
+}
+
+/** Obsidian reports a name clash as a plain Error with this message. */
+function isAlreadyExists(error: unknown): boolean {
+	return error instanceof Error && /already exists/i.test(error.message);
+}
+
+/** `Buy milk.md` to `Buy milk 2.md`, `Buy milk 2.md` to `Buy milk 3.md`. */
+function nextCandidate(path: string): string {
+	const withoutExt = path.replace(/\.md$/, "");
+	const numbered = /^(.*) (\d+)$/.exec(withoutExt);
+	if (!numbered) return `${withoutExt} 2.md`;
+	return `${numbered[1]} ${Number(numbered[2]) + 1}.md`;
 }
 
 export function parentFolder(path: string): string {
