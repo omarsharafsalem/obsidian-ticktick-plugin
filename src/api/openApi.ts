@@ -298,7 +298,16 @@ export class OpenApiClient implements TickTickClient {
 
 	async createTask(task: NewTask): Promise<Task> {
 		const raw = await this.send("POST", "/task", serialiseTask(task));
-		return normaliseTask(raw);
+		const created = normaliseTask(raw);
+
+		// Create accepts parentId and silently ignores it — verified against the
+		// live API. Update honours it, so a task that was meant to have a parent
+		// gets one in a second call rather than quietly arriving at the top level.
+		if (task.parentId && !created.parentId) {
+			return this.updateTask({ ...created, parentId: task.parentId });
+		}
+
+		return created;
 	}
 
 	async updateTask(task: Task): Promise<Task> {
