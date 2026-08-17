@@ -103,15 +103,54 @@ export function zonedMidnight(dateOnly: string, timeZone?: string): string | und
 }
 
 /**
- * Renders a date for storage in note frontmatter. All-day tasks get a bare
- * `YYYY-MM-DD` so that Obsidian's date pickers and Dataview treat them as
- * dates rather than instants.
+ * The wall-clock time of an instant in a given zone, as `YYYY-MM-DDTHH:mm`.
+ *
+ * Obsidian's datetime properties are naive — no zone, displayed exactly as
+ * written — so an instant has to be converted before it is stored, not after.
  */
-export function toFrontmatterDate(iso: string | undefined, isAllDay: boolean): string | undefined {
+export function timeInZone(iso: string, timeZone?: string): string | undefined {
+	const parsed = new Date(iso);
+	if (Number.isNaN(parsed.getTime())) return undefined;
+
+	try {
+		const parts = new Intl.DateTimeFormat("en-CA", {
+			timeZone: timeZone || undefined,
+			hour12: false,
+			year: "numeric",
+			month: "2-digit",
+			day: "2-digit",
+			hour: "2-digit",
+			minute: "2-digit",
+		}).formatToParts(parsed);
+
+		const get = (type: string): string =>
+			parts.find((part) => part.type === type)?.value ?? "00";
+
+		// `hour` comes back as 24 at midnight under hour12: false in some engines.
+		const hour = String(Number(get("hour")) % 24).padStart(2, "0");
+		return `${get("year")}-${get("month")}-${get("day")}T${hour}:${get("minute")}`;
+	} catch {
+		return parsed.toISOString().slice(0, 16);
+	}
+}
+
+/**
+ * Renders a date for storage in note frontmatter.
+ *
+ * All-day tasks get a bare `YYYY-MM-DD`. A timed task gets the wall-clock time
+ * where the task lives, because Obsidian shows a datetime exactly as written:
+ * storing the UTC form makes a task due at 00:30 read as 23:30 the day before.
+ */
+export function toFrontmatterDate(
+	iso: string | undefined,
+	isAllDay: boolean,
+	timeZone?: string,
+): string | undefined {
 	if (!iso) return undefined;
 	const parsed = new Date(iso);
 	if (Number.isNaN(parsed.getTime())) return undefined;
-	return isAllDay ? parsed.toISOString().slice(0, 10) : parsed.toISOString();
+	if (isAllDay) return parsed.toISOString().slice(0, 10);
+	return timeInZone(iso, timeZone);
 }
 
 export function fromFrontmatterDate(value: unknown): string | undefined {

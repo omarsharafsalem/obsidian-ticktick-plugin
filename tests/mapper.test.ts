@@ -45,12 +45,18 @@ describe("taskToNote", () => {
 		expect(note.body.trim()).toBe("Semi-skimmed");
 	});
 
-	it("writes an all-day due date as a bare date and a timed one as an instant", () => {
+	// The timezone is stated rather than inherited, so this asserts the same
+	// thing on any machine — including CI, which runs in UTC.
+	it("writes an all-day due date as a bare date and a timed one as wall-clock time", () => {
 		const allDay = taskToNote(task({ dueDate: "2026-08-20T00:00:00.000Z", isAllDay: true }), options);
 		expect(allDay.frontmatter.due).toBe("2026-08-20");
 
-		const timed = taskToNote(task({ dueDate: "2026-08-20T09:30:00.000Z", isAllDay: false }), options);
-		expect(timed.frontmatter.due).toBe("2026-08-20T09:30:00.000Z");
+		const timed = taskToNote(
+			task({ dueDate: "2026-08-20T09:30:00.000Z", isAllDay: false, timeZone: "Europe/London" }),
+			options,
+		);
+		// 09:30 UTC is 10:30 in London in August, and that is what a reader wants.
+		expect(timed.frontmatter.due).toBe("2026-08-20T10:30");
 	});
 
 	it("stores tags without a leading hash, as Obsidian's tags property expects", () => {

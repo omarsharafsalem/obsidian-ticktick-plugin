@@ -387,10 +387,10 @@ export function taskToNote(
 	const marker = options.marker;
 	if (marker?.property.trim()) frontmatter[marker.property.trim()] = marker.value;
 
-	const due = toFrontmatterDate(task.dueDate, task.isAllDay);
+	const due = toFrontmatterDate(task.dueDate, task.isAllDay, task.timeZone);
 	if (due) frontmatter[p.due] = due;
 
-	const start = toFrontmatterDate(task.startDate, task.isAllDay);
+	const start = toFrontmatterDate(task.startDate, task.isAllDay, task.timeZone);
 	if (start) frontmatter[p.start] = start;
 
 	// Written bare, without '#', which is what Obsidian's tags property expects.
