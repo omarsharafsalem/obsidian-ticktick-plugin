@@ -125,6 +125,13 @@ export class NoteRepository {
 		await this.app.fileManager.trashFile(file);
 	}
 
+	/** An `obsidian://` link that opens this note, for putting in a TickTick task. */
+	noteUrl(file: TFile): string {
+		const vault = encodeURIComponent(this.app.vault.getName());
+		const path = encodeURIComponent(file.path);
+		return `obsidian://open?vault=${vault}&file=${path}`;
+	}
+
 	getFile(path: string): TFile | null {
 		const file = this.app.vault.getAbstractFileByPath(normalizePath(path));
 		return file instanceof TFile ? file : null;

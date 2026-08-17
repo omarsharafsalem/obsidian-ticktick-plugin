@@ -170,7 +170,7 @@ export default class TickTickSyncPlugin extends Plugin {
 
 	// --- Syncing ------------------------------------------------------------
 
-	async runSync(options: { silent?: boolean } = {}): Promise<SyncReport | null> {
+	async runSync(options: { silent?: boolean; dryRun?: boolean } = {}): Promise<SyncReport | null> {
 		if (!this.isConnected()) {
 			if (!options.silent) new Notice("TickTick is not connected yet. Check plugin settings.");
 			return null;
@@ -189,7 +189,7 @@ export default class TickTickSyncPlugin extends Plugin {
 
 		this.setStatus("syncing");
 		try {
-			const report = await engine.sync();
+			const report = await engine.sync({ dryRun: options.dryRun });
 			this.setStatus("idle");
 			if (!options.silent || report.errors.length > 0) {
 				new Notice(summarise(report));

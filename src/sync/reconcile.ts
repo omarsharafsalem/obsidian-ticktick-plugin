@@ -207,10 +207,10 @@ export function mergeSnapshots(
 			case "conflict":
 				conflicts.push(field);
 				if (winner === "local") {
-					assign(merged, field, local[field]);
+					assign(merged, field, preferNonEmpty(field, local[field], remote[field]));
 					remoteNeedsUpdate = true;
 				} else {
-					assign(merged, field, remote[field]);
+					assign(merged, field, preferNonEmpty(field, remote[field], local[field]));
 					localNeedsUpdate = true;
 				}
 				break;
@@ -222,6 +222,21 @@ export function mergeSnapshots(
 
 function assign(target: TaskSnapshot, field: SyncedField, value: unknown): void {
 	(target as Record<string, unknown>)[field] = value;
+}
+
+/**
+ * Never let nothing overwrite something.
+ *
+ * TickTick descriptions are usually empty while the note may hold real writing,
+ * and on a first link-up there is no base to tell who changed what — so the
+ * merge would hand the empty side the win and the writing would be gone.
+ * Clearing text deliberately still works: it just has to be done on the side
+ * that has the text.
+ */
+function preferNonEmpty(field: SyncedField, chosen: unknown, other: unknown): unknown {
+	if (field !== "content" && field !== "title") return chosen;
+	const isBlank = (value: unknown) => typeof value !== "string" || value.trim() === "";
+	return isBlank(chosen) && !isBlank(other) ? other : chosen;
 }
 
 // --- Top-level decision ------------------------------------------------------

@@ -52,6 +52,15 @@ export interface Task {
 	 * through untouched rather than merged.
 	 */
 	inactiveBody?: string;
+	/**
+	 * A link back to this task's note, appended to the description on the way
+	 * out and stripped on the way in.
+	 *
+	 * Outside {@link SYNCED_FIELDS} on purpose: the note never contains it, so
+	 * comparing it would report a difference on every single sync and rewrite
+	 * both sides forever.
+	 */
+	noteUrl?: string;
 	status: TaskStatus;
 	priority: Priority;
 	tags: string[];

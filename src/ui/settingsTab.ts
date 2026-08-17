@@ -10,7 +10,7 @@ import {
 import { awaitLoopbackCode, exchangeAuthCode, extractAuthCode, randomState } from "../auth/oauth";
 import { DEFAULT_PROPERTIES, type FieldSyncMode, type PropertyNames } from "../settings";
 import { emptyState, SyncStore } from "../sync/state";
-import { PasteCodeModal } from "./authModal";
+import { PasteCodeModal, PlannedChangesModal } from "./authModal";
 
 const FIELD_LABELS: Record<SyncedField, string> = {
 	title: "Title",
@@ -31,7 +31,6 @@ const FIELD_LABELS: Record<SyncedField, string> = {
 const PROPERTY_LABELS: Record<keyof PropertyNames, string> = {
 	id: "Task ID",
 	project: "List",
-	title: "Title override",
 	status: "Status",
 	priority: "Priority",
 	due: "Due date",
@@ -42,9 +41,15 @@ const PROPERTY_LABELS: Record<keyof PropertyNames, string> = {
 	completed: "Completed at",
 	parent: "Parent task",
 	children: "Child tasks",
-	allDay: "All-day flag",
-	deleted: "Deleted in TickTick at",
 };
+
+/** One value per line, blanks dropped — safe for labels containing spaces and emoji. */
+function splitLines(value: string): string[] {
+	return value
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+}
 
 const TABS = [
 	{ id: "connection", label: "Connection" },
@@ -351,6 +356,49 @@ export class TickTickSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(root)
+			.setName("Synced part of the note ends at")
+			.setDesc(
+				"Everything below this line is yours — never read, rewritten or deleted, so a task can " +
+					"carry as much writing as it needs without any of it reaching TickTick. The text above " +
+					"it is the task's description. Leave blank to sync the whole body.",
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("<!-- ticktick:end -->")
+					.setValue(settings.syncedRegionMarker)
+					.onChange(async (value) => {
+						settings.syncedRegionMarker = value.trim();
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(root)
+			.setName("Link back to the note from TickTick")
+			.setDesc(
+				"Adds a link to the Obsidian note at the end of the TickTick task's description. It is " +
+					"stripped again when reading, so it never shows up in the note itself.",
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(settings.linkBackToNote).onChange(async (value) => {
+					settings.linkBackToNote = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(root)
+			.setName("Deleted tasks go to")
+			.setDesc(
+				"When a task is deleted in TickTick its note moves here rather than being deleted — the " +
+					"folder is the record. Notes in this folder are never synced again.",
+			)
+			.addText((text) =>
+				text.setValue(settings.deletedTaskFolder).onChange(async (value) => {
+					settings.deletedTaskFolder = value.trim() || "🗄️ Archive";
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(root)
 			.setName("Task folder")
 			.setDesc("Every task becomes one note inside this folder.")
 			.addText((text) =>
@@ -427,12 +475,19 @@ export class TickTickSettingTab extends PluginSettingTab {
 			}),
 		);
 
-		new Setting(root).addButton((button) =>
-			button
-				.setButtonText("Sync now")
-				.setCta()
-				.onClick(() => void this.plugin.runSync()),
-		);
+		new Setting(root)
+			.addButton((button) =>
+				button
+					.setButtonText("Sync now")
+					.setCta()
+					.onClick(() => void this.plugin.runSync()),
+			)
+			.addButton((button) =>
+				button.setButtonText("Preview changes").onClick(async () => {
+					const report = await this.plugin.runSync({ silent: true, dryRun: true });
+					if (report) new PlannedChangesModal(this.app, report).open();
+				}),
+			);
 	}
 
 	// --- Lists ----------------------------------------------------------------
@@ -559,8 +614,17 @@ export class TickTickSettingTab extends PluginSettingTab {
 			cls: "setting-item-description",
 		});
 
+		root.createEl("p", {
+			text:
+				"TickTick knows three statuses and a working vault usually has more, so each one takes a " +
+				"list — one value per line. The first line is what gets written when the status actually " +
+				"changes; the rest are recognised and left alone. A task sitting at 'Paused' stays " +
+				"Paused when its due date moves, because TickTick still calls both of them not-done.",
+			cls: "setting-item-description",
+		});
+
 		const statusHelp: Record<TaskStatus, string> = {
-			todo: "An open task.",
+			todo: "Not done. TickTick stores this as status 0.",
 			completed: "Ticked off. TickTick stores this as status 2.",
 			abandoned: "Won't do. TickTick stores this as status -1.",
 		};
@@ -569,13 +633,30 @@ export class TickTickSettingTab extends PluginSettingTab {
 			new Setting(root)
 				.setName(`Status: ${key}`)
 				.setDesc(statusHelp[key])
-				.addText((text) =>
-					text.setValue(settings.labels.status[key]).onChange(async (value) => {
-						settings.labels.status[key] = value.trim() || key;
+				.addTextArea((text) => {
+					text.inputEl.rows = 4;
+					text.setValue(settings.labels.status[key].join("\n")).onChange(async (value) => {
+						const values = splitLines(value);
+						settings.labels.status[key] = values.length > 0 ? values : [key];
 						await this.plugin.saveSettings();
-					}),
-				);
+					});
+				});
 		}
+
+		new Setting(root)
+			.setName("Status: filing only")
+			.setDesc(
+				"Values that describe filing rather than progress — 'Archived', say. They never change " +
+					"anything in TickTick in either direction, because archiving a finished task must not " +
+					"reopen it and archiving an open one must not complete it. One per line.",
+			)
+			.addTextArea((text) => {
+				text.inputEl.rows = 3;
+				text.setValue(settings.labels.statusNeutral.join("\n")).onChange(async (value) => {
+					settings.labels.statusNeutral = splitLines(value);
+					await this.plugin.saveSettings();
+				});
+			});
 
 		const priorityHelp: Record<Priority, string> = {
 			none: "No priority. TickTick sends 0.",

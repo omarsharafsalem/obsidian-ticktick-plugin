@@ -78,6 +78,20 @@ function serialiseTaskDate(
 	return toTickTickDate(zonedMidnight(iso.slice(0, 10), timeZone) ?? iso);
 }
 
+/**
+ * Removes the plugin's own backlink from a description.
+ *
+ * The link is added on the way out and taken off on the way in, so the value
+ * compared against the note is always the text the user actually wrote.
+ */
+export function stripNoteLink(content: string): string {
+	return content
+		.split("\n")
+		.filter((line) => !/\[[^\]]*\]\(obsidian:\/\/[^)]*\)/.test(line))
+		.join("\n")
+		.trimEnd();
+}
+
 function asKind(value: unknown): TaskKind | undefined {
 	return value === "TEXT" || value === "CHECKLIST" || value === "NOTE" ? value : undefined;
 }
@@ -99,7 +113,7 @@ export function normaliseTask(raw: unknown): Task {
 		projectId: asString(task["projectId"]) ?? "",
 		title: asString(task["title"]) ?? "",
 		kind,
-		content: descIsBody ? rawDesc : rawContent,
+		content: stripNoteLink(descIsBody ? rawDesc : rawContent),
 		inactiveBody: descIsBody ? rawContent : rawDesc,
 		status: statusFromWire(task["status"]),
 		priority: priorityFromWire(task["priority"]),
@@ -143,11 +157,17 @@ export function serialiseTask(task: NewTask & { id?: string }): Json {
 
 	// Write the body back to the field this kind actually uses, and restore the
 	// other one untouched. Sending only `content` erases a checklist's `desc`.
+	// The backlink is appended here rather than stored, so it never reaches the
+	// note and never shows up as a difference between the two sides.
+	const described = task.noteUrl
+		? `${task.content ? `${task.content}\n\n` : ""}[Open in Obsidian](${task.noteUrl})`
+		: task.content;
+
 	if (task.kind === "CHECKLIST") {
-		body["desc"] = task.content;
+		body["desc"] = described;
 		body["content"] = task.inactiveBody ?? "";
 	} else {
-		body["content"] = task.content;
+		body["content"] = described;
 		if (task.inactiveBody) body["desc"] = task.inactiveBody;
 	}
 

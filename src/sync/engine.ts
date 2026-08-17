@@ -34,6 +34,8 @@ export interface SyncReport {
 	conflicts: number;
 	errors: string[];
 	durationMs: number;
+	/** Every change a dry run would have made, in the order it would make them. */
+	planned: string[];
 }
 
 function emptyReport(): SyncReport {
@@ -47,6 +49,7 @@ function emptyReport(): SyncReport {
 		conflicts: 0,
 		errors: [],
 		durationMs: 0,
+		planned: [],
 	};
 }
 
@@ -64,6 +67,10 @@ interface LocalNote {
 	snapshot: TaskSnapshot;
 	taskId?: string;
 	mtime: number;
+	/** Everything below the marker, put back verbatim on every write. */
+	privateBody: string;
+	/** What the status property says now, so an equivalent wording survives. */
+	statusLabel?: string;
 }
 
 /** A remote record plus the extra context the engine needs to write it back. */
@@ -94,13 +101,17 @@ export class SyncEngine {
 	 */
 	private links: TaskLinkIndex = NO_LINKS;
 
+	/** Report what would change and write nothing. Set for the run's duration. */
+	private dryRun = false;
+
 	constructor(private readonly deps: EngineDeps) {}
 
 	get isRunning(): boolean {
 		return this.running;
 	}
 
-	async sync(): Promise<SyncReport> {
+	async sync(options: { dryRun?: boolean } = {}): Promise<SyncReport> {
+		this.dryRun = options.dryRun === true;
 		if (this.running) {
 			throw new Error("A sync is already in progress");
 		}
@@ -214,6 +225,7 @@ export class SyncEngine {
 			properties: settings.properties,
 			inlineTags: settings.inlineTags,
 			labels: settings.labels,
+			syncedRegionMarker: settings.syncedRegionMarker,
 			resolveProject: (nameOrId: string) =>
 				idsByName.get(nameOrId.trim().toLowerCase()) ??
 				(projectNames.has(nameOrId) ? nameOrId : undefined),
@@ -240,9 +252,9 @@ export class SyncEngine {
 				const note = await notes.read(file);
 				const parsed = noteToTask(note, note.title, mapperOptions);
 
-				// Its task was deleted in TickTick and the note was kept as a record.
-				// Left entirely alone: syncing it again would recreate the task.
-				if (note.frontmatter[settings.properties.deleted]) continue;
+				// A note already moved to the deleted-task folder is a record, not
+				// a task. Left alone: syncing it again would recreate the task.
+				if (inDeletedFolder(file.path, settings.deletedTaskFolder)) continue;
 
 				// A note already carrying a task id stays a task whatever else
 				// changed, so an edit to the marker cannot orphan a synced note.
@@ -266,6 +278,8 @@ export class SyncEngine {
 					file,
 					taskId: parsed.id,
 					mtime: note.mtime,
+					privateBody: parsed.privateBody,
+					statusLabel: readStatusLabel(note.frontmatter[settings.properties.status]),
 					snapshot: toSnapshot(
 						parsedNoteToTask({ ...parsed, projectId }, blankTask(projectId)),
 					),
@@ -475,6 +489,12 @@ export class SyncEngine {
 		const { action, taskId, entry, localNote, remoteRecord, projectNames, report } = context;
 		const { store, notes, client, settings } = this.deps;
 
+		if (this.dryRun) {
+			const description = describeAction(action, localNote?.file.path, remoteRecord?.task.title);
+			if (description) report.planned.push(description);
+			return;
+		}
+
 		switch (action.kind) {
 			case "noop":
 				if (entry && localNote && remoteRecord) {
@@ -502,7 +522,7 @@ export class SyncEngine {
 				const created = await client.createTask(
 					this.toNewTask(action.snapshot, localNote.snapshot.projectId),
 				);
-				await this.stampNote(localNote.file, created, action.snapshot);
+				await this.stampNote(localNote.file, created, action.snapshot, localNote);
 				store.set(this.entryFor(created, localNote.file.path, action.snapshot, Date.now()));
 				report.createdRemote++;
 				return;
@@ -524,7 +544,7 @@ export class SyncEngine {
 				};
 
 				if (action.kind !== "updateLocal") {
-					await client.updateTask(merged);
+					await client.updateTask(this.withNoteLink(merged, localNote.file));
 					if (merged.status === "completed" && remoteRecord.task.status !== "completed") {
 						await client.completeTask(merged.projectId, taskId);
 					}
@@ -535,21 +555,20 @@ export class SyncEngine {
 					report.updatedLocal++;
 				}
 
-				const file = await this.writeNote(localNote.file, merged, projectNames);
+				const file = await this.writeNote(localNote.file, merged, projectNames, localNote);
 				store.set(this.entryFor(merged, file.path, action.snapshot, file.stat.mtime));
 				return;
 			}
 
 			case "orphanLocal": {
 				// The task is gone from TickTick but the note is the record of the
-				// work, so it stays. Stamping it stops it syncing again — without
-				// that it would look like a brand new note and be pushed straight
-				// back to TickTick as a fresh task.
+				// work, so it moves to the archive rather than being deleted. The
+				// folder is what marks it — no property, and it is skipped on every
+				// later pass, so it is never pushed back as a new task.
 				if (localNote) {
-					const marked = await notes.read(localNote.file);
-					marked.frontmatter[settings.properties.deleted] = new Date().toISOString();
-					await notes.write(localNote.file, marked);
-					this.deps.log("Task deleted in TickTick; keeping the note", localNote.file.path);
+					const target = `${settings.deletedTaskFolder}/${localNote.file.name}`;
+					await notes.rename(localNote.file, target);
+					this.deps.log("Task deleted in TickTick; note archived to", target);
 				}
 				store.tombstone(taskId);
 				return;
@@ -601,12 +620,17 @@ export class SyncEngine {
 				continue;
 			}
 
+			if (this.dryRun) {
+				report.planned.push(`Create TickTick task from ${note.file.path}`);
+				continue;
+			}
+
 			try {
 				this.deps.log("Creating a TickTick task from", note.file.path);
 				const created = await client.createTask(
 					this.toNewTask(note.snapshot, note.snapshot.projectId || inbox || ""),
 				);
-				await this.stampNote(note.file, created, note.snapshot);
+				await this.stampNote(note.file, created, note.snapshot, note);
 				store.set(this.entryFor(created, note.file.path, note.snapshot, Date.now()));
 				report.createdRemote++;
 			} catch (error) {
@@ -633,10 +657,17 @@ export class SyncEngine {
 		file: TFile,
 		task: Task,
 		projectNames: Map<string, string>,
+		note?: LocalNote,
 	): Promise<TFile> {
 		const { notes, settings } = this.deps;
 		const projectName = projectNames.get(task.projectId);
-		await notes.write(file, this.render(task));
+		await notes.write(
+			file,
+			this.render(task, {
+				currentStatus: note?.statusLabel,
+				privateBody: note?.privateBody,
+			}),
+		);
 
 		// Once notes are found by property rather than by folder, where a note
 		// lives is the user's decision — dragging it back to a computed path
@@ -662,12 +693,29 @@ export class SyncEngine {
 	}
 
 	/** Records the freshly assigned remote id into a locally authored note. */
-	private async stampNote(file: TFile, task: Task, snapshot: TaskSnapshot): Promise<void> {
+	private async stampNote(
+		file: TFile,
+		task: Task,
+		snapshot: TaskSnapshot,
+		note?: LocalNote,
+	): Promise<void> {
 		const merged: Task = { ...task, ...snapshot, id: task.id, projectId: task.projectId };
-		await this.deps.notes.write(file, this.render(merged));
+		await this.deps.notes.write(
+			file,
+			this.render(merged, {
+				currentStatus: note?.statusLabel,
+				privateBody: note?.privateBody,
+			}),
+		);
 	}
 
-	private render(task: Task) {
+	/** Attaches the note's own URL so TickTick's description can link back to it. */
+	private withNoteLink(task: Task, file: TFile): Task {
+		if (!this.deps.settings.linkBackToNote) return task;
+		return { ...task, noteUrl: this.deps.notes.noteUrl(file) };
+	}
+
+	private render(task: Task, note?: { currentStatus?: string; privateBody?: string }) {
 		const { settings } = this.deps;
 		return taskToNote(
 			task,
@@ -676,8 +724,9 @@ export class SyncEngine {
 				inlineTags: settings.inlineTags,
 				labels: settings.labels,
 				marker: settings.taskMarker,
+				syncedRegionMarker: settings.syncedRegionMarker,
 			},
-			this.links.contextFor(task),
+			{ ...this.links.contextFor(task), ...note },
 		);
 	}
 
@@ -719,6 +768,47 @@ export class SyncEngine {
 			lastSyncedAt: Date.now(),
 		};
 	}
+}
+
+/** A one-line summary of what an action would do, for the dry-run report. */
+function describeAction(action: SyncAction, notePath?: string, title?: string): string | undefined {
+	const what = notePath ?? title ?? "";
+	switch (action.kind) {
+		case "noop":
+		case "forget":
+			return undefined;
+		case "createLocal":
+		case "restoreLocal":
+			return `Create note for "${title ?? what}"`;
+		case "createRemote":
+		case "restoreRemote":
+			return `Create TickTick task from ${what}`;
+		case "updateLocal":
+			return `Update note ${what}`;
+		case "updateRemote":
+			return `Update TickTick task for ${what}`;
+		case "updateBoth":
+			return `Update both sides of ${what}`;
+		case "orphanLocal":
+			return `Archive ${what} — its task is gone from TickTick`;
+		case "deleteLocal":
+			return `Delete note ${what}`;
+		case "deleteRemote":
+			return `Delete TickTick task for ${what}`;
+	}
+}
+
+/** The status property as written, so an equivalent wording can be preserved. */
+function readStatusLabel(raw: unknown): string | undefined {
+	const value = Array.isArray(raw) ? raw[0] : raw;
+	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** True when a note already sits in the folder used for deleted tasks. */
+function inDeletedFolder(path: string, folder: string): boolean {
+	const root = folder.trim().replace(/\/+$/, "");
+	if (!root) return false;
+	return path === root || path.startsWith(`${root}/`);
 }
 
 /**

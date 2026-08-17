@@ -211,6 +211,36 @@ describe("reconcile — deletion", () => {
 		expect(reconcile({ base, remote: snap() }, keep).kind).toBe("deleteRemote");
 	});
 
+	/**
+	 * TickTick descriptions are usually empty while a note may hold real writing.
+	 * On a first link-up there is no base to say who changed what, so without
+	 * this the merge hands the empty side the win and the writing is gone.
+	 */
+	it("never lets an empty description overwrite a written one", () => {
+		const local = snap({ content: "Five paragraphs of context I wrote." });
+		const remote = snap({ content: "" });
+
+		const action = reconcile({ local, remote }, options);
+		expect(action).toMatchObject({ kind: expect.stringContaining("update") });
+		if ("snapshot" in action) {
+			expect(action.snapshot.content).toBe("Five paragraphs of context I wrote.");
+		}
+	});
+
+	it("never lets an empty title overwrite a real one", () => {
+		const action = reconcile({ local: snap({ title: "Buy milk" }), remote: snap({ title: "" }) }, options);
+		if ("snapshot" in action) expect(action.snapshot.title).toBe("Buy milk");
+	});
+
+	it("still lets a real edit replace existing text", () => {
+		const base = snap({ content: "old" });
+		const action = reconcile(
+			{ base, local: snap({ content: "old" }), remote: snap({ content: "new" }) },
+			options,
+		);
+		if ("snapshot" in action) expect(action.snapshot.content).toBe("new");
+	});
+
 	it("forgets a task that vanished from both sides", () => {
 		expect(reconcile({ base: snap() }, options).kind).toBe("forget");
 	});

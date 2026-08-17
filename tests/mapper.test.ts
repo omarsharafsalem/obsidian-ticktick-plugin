@@ -33,8 +33,8 @@ describe("taskToNote", () => {
 		);
 
 		expect(note.frontmatter).toMatchObject({
-			ticktick_id: "t1",
-			list: "p1",
+			ticktick_task_id: "t1",
+			project: "p1",
 			status: "todo",
 			priority: "high",
 			due: "2026-08-20",
@@ -57,11 +57,10 @@ describe("taskToNote", () => {
 		expect(note.frontmatter.tags).toEqual(["work", "home"]);
 	});
 
-	it("only records a title override when the filename cannot hold the title", () => {
-		expect(taskToNote(task({ title: "Buy milk" }), options).frontmatter.ticktick_title).toBeUndefined();
-		expect(taskToNote(task({ title: "Read: chapter 3/4" }), options).frontmatter.ticktick_title).toBe(
-			"Read: chapter 3/4",
-		);
+	it("never writes a title override property", () => {
+		// The real title lives in the plugin's own state, not in the vault.
+		const note = taskToNote(task({ title: "Read: chapter 3/4" }), options);
+		expect(JSON.stringify(note.frontmatter)).not.toContain("Read: chapter 3/4");
 	});
 
 	it("honours custom property names", () => {
@@ -81,8 +80,8 @@ describe("noteToTask", () => {
 		const parsed = noteToTask(
 			{
 				frontmatter: {
-					ticktick_id: "t1",
-					list: "p1",
+					ticktick_task_id: "t1",
+					project: "p1",
 					status: "completed",
 					priority: "medium",
 					due: "2026-08-20",
@@ -107,13 +106,9 @@ describe("noteToTask", () => {
 		expect(parsed.title).toBe("Renamed in Obsidian");
 	});
 
-	it("uses the title override when present", () => {
-		const parsed = noteToTask(
-			{ frontmatter: { ticktick_title: "Read: chapter 3/4" }, body: "" },
-			"Read- chapter 3-4",
-			options,
-		);
-		expect(parsed.title).toBe("Read: chapter 3/4");
+	it("takes the title from the filename", () => {
+		const parsed = noteToTask({ frontmatter: {}, body: "" }, "Read- chapter 3-4", options);
+		expect(parsed.title).toBe("Read- chapter 3-4");
 	});
 
 	it("unions emoji tags written in the body with the tags property", () => {
@@ -202,12 +197,12 @@ describe("round trip", () => {
 describe("the list property", () => {
 	it("writes the list's name, not its id", () => {
 		const note = taskToNote(task({ projectId: "6226ff98" }), options, { projectName: "Errands" });
-		expect(note.frontmatter.list).toBe("Errands");
+		expect(note.frontmatter.project).toBe("Errands");
 	});
 
 	it("falls back to the id when the name is unknown", () => {
 		const note = taskToNote(task({ projectId: "6226ff98" }), options);
-		expect(note.frontmatter.list).toBe("6226ff98");
+		expect(note.frontmatter.project).toBe("6226ff98");
 	});
 
 	it("writes a link to the project note when one is configured", () => {
@@ -216,7 +211,7 @@ describe("the list property", () => {
 			projectLink: { title: "Health dashboard" },
 		});
 
-		expect(note.frontmatter.list).toBe("[[Health dashboard]]");
+		expect(note.frontmatter.project).toBe("[[Health dashboard]]");
 	});
 
 	it("qualifies the project link with a path when given one", () => {
@@ -224,12 +219,12 @@ describe("the list property", () => {
 			projectLink: { title: "Health dashboard", path: "Areas/Health/Health dashboard" },
 		});
 
-		expect(note.frontmatter.list).toBe("[[Areas/Health/Health dashboard|Health dashboard]]");
+		expect(note.frontmatter.project).toBe("[[Areas/Health/Health dashboard|Health dashboard]]");
 	});
 
 	it("resolves a project link back to the list", () => {
 		const parsed = noteToTask(
-			{ frontmatter: { list: "[[Health dashboard]]" }, body: "" },
+			{ frontmatter: { project: "[[Health dashboard]]" }, body: "" },
 			"Buy milk",
 			{
 				...options,
@@ -243,7 +238,7 @@ describe("the list property", () => {
 	// A note title is never a list id, so passing it through would move the task.
 	it("does not treat an unresolved link as a list id", () => {
 		const parsed = noteToTask(
-			{ frontmatter: { list: "[[Some other note]]" }, body: "" },
+			{ frontmatter: { project: "[[Some other note]]" }, body: "" },
 			"Buy milk",
 			{ ...options, resolveProject: () => undefined },
 		);
@@ -252,7 +247,7 @@ describe("the list property", () => {
 	});
 
 	it("turns the name back into an id when reading", () => {
-		const parsed = noteToTask({ frontmatter: { list: "Errands" }, body: "" }, "Buy milk", {
+		const parsed = noteToTask({ frontmatter: { project: "Errands" }, body: "" }, "Buy milk", {
 			...options,
 			resolveProject: (name) => (name.toLowerCase() === "errands" ? "6226ff98" : undefined),
 		});
@@ -261,7 +256,7 @@ describe("the list property", () => {
 	});
 
 	it("passes an unrecognised value through rather than guessing", () => {
-		const parsed = noteToTask({ frontmatter: { list: "6226ff98" }, body: "" }, "Buy milk", {
+		const parsed = noteToTask({ frontmatter: { project: "6226ff98" }, body: "" }, "Buy milk", {
 			...options,
 			resolveProject: () => undefined,
 		});
@@ -301,7 +296,7 @@ describe("list-typed properties", () => {
 	});
 
 	it("reads a list-wrapped list name", () => {
-		const parsed = noteToTask({ frontmatter: { list: ["Errands"] }, body: "" }, "Buy milk", {
+		const parsed = noteToTask({ frontmatter: { project: ["Errands"] }, body: "" }, "Buy milk", {
 			...options,
 			resolveProject: (name) => (name === "Errands" ? "6226ff98" : undefined),
 		});
@@ -318,7 +313,8 @@ describe("value labels", () => {
 	const vaultWords: MapperOptions = {
 		...options,
 		labels: {
-			status: { todo: "Not started", completed: "Done", abandoned: "Won't do" },
+			status: { todo: ["Not started"], completed: ["Done"], abandoned: ["Won't do"] },
+			statusNeutral: ["Archived"],
 			priority: { none: "—", low: "P3", medium: "P2", high: "P1" },
 			reminders: { "TRIGGER:-PT30M": "30 minutes before", "TRIGGER:PT0S": "On time" },
 		},
@@ -409,9 +405,10 @@ describe("the task marker", () => {
 });
 
 describe("the all-day flag", () => {
-	it("marks an all-day task explicitly", () => {
+	it("writes no all-day property — the date's shape carries it", () => {
 		const note = taskToNote(task({ dueDate: "2026-08-20T00:00:00.000Z", isAllDay: true }), options);
-		expect(note.frontmatter.all_day).toBe(true);
+		expect(note.frontmatter.all_day).toBeUndefined();
+		expect(note.frontmatter.due).toBe("2026-08-20");
 	});
 
 	it("leaves the flag off a timed task", () => {
@@ -421,24 +418,17 @@ describe("the all-day flag", () => {
 
 	// Once due is registered as a datetime, Obsidian rewrites a bare date to
 	// include a time. Without the explicit flag the task would look scheduled.
-	it("trusts the flag over the shape of the date", () => {
+
+	// Obsidian rewrites a bare date once `due` is datetime-typed, so midnight
+	// has to count as all-day or every one of them would look scheduled.
+	it("treats exactly midnight as all-day", () => {
 		const parsed = noteToTask(
-			{ frontmatter: { due: "2026-08-20T00:00:00.000Z", all_day: true }, body: "" },
+			{ frontmatter: { due: "2026-08-20T00:00:00.000Z" }, body: "" },
 			"Buy milk",
 			options,
 		);
 
 		expect(parsed.isAllDay).toBe(true);
-	});
-
-	it("treats an explicit false as timed even for a bare date", () => {
-		const parsed = noteToTask(
-			{ frontmatter: { due: "2026-08-20", all_day: false }, body: "" },
-			"Buy milk",
-			options,
-		);
-
-		expect(parsed.isAllDay).toBe(false);
 	});
 
 	it("falls back to the date's shape when the flag is absent", () => {
@@ -683,7 +673,128 @@ describe("body and checklist", () => {
 
 	it("round-trips an empty description with subtasks", () => {
 		const body = buildBody("", [{ title: "one", completed: false }]);
-		expect(splitBody(body)).toEqual({ content: "", items: [{ title: "one", completed: false }] });
+		expect(splitBody(body)).toEqual({
+			content: "",
+			items: [{ title: "one", completed: false }],
+			privateBody: "",
+		});
+	});
+});
+
+/**
+ * The guarantee the marker exists to give: everything below it belongs to the
+ * user, and the sync never reads, rewrites or deletes any of it.
+ */
+describe("the synced region", () => {
+	const marker = "<!-- ticktick:end -->";
+	const withMarker: MapperOptions = { ...options, syncedRegionMarker: marker };
+
+	const note = [
+		"The description that syncs.",
+		"",
+		marker,
+		"",
+		"My own notes. Five emails of context.",
+		"- [ ] a checkbox that is NOT a subtask",
+	].join("\n");
+
+	it("reads only the part above the marker as the description", () => {
+		const parsed = noteToTask({ frontmatter: {}, body: note }, "Buy milk", withMarker);
+		expect(parsed.content).toBe("The description that syncs.");
+	});
+
+	it("does not treat checkboxes below the marker as subtasks", () => {
+		const parsed = noteToTask({ frontmatter: {}, body: note }, "Buy milk", withMarker);
+		expect(parsed.items).toEqual([]);
+	});
+
+	it("gives the private part back byte for byte", () => {
+		const parsed = noteToTask({ frontmatter: {}, body: note }, "Buy milk", withMarker);
+		const rewritten = taskToNote(task({ content: "A new description from TickTick" }), withMarker, {
+			privateBody: parsed.privateBody,
+		});
+
+		expect(rewritten.body).toContain("My own notes. Five emails of context.");
+		expect(rewritten.body).toContain("- [ ] a checkbox that is NOT a subtask");
+		expect(rewritten.body).toContain("A new description from TickTick");
+		expect(rewritten.body).not.toContain("The description that syncs.");
+	});
+
+	it("survives TickTick clearing the description entirely", () => {
+		const parsed = noteToTask({ frontmatter: {}, body: note }, "Buy milk", withMarker);
+		const rewritten = taskToNote(task({ content: "" }), withMarker, {
+			privateBody: parsed.privateBody,
+		});
+
+		expect(rewritten.body).toContain("My own notes. Five emails of context.");
+	});
+
+	it("syncs the whole body when no marker is configured", () => {
+		const parsed = noteToTask({ frontmatter: {}, body: note }, "Buy milk", options);
+		expect(parsed.content).toContain("My own notes");
+	});
+
+	it("emits the marker so the boundary exists from the first write", () => {
+		const written = taskToNote(task({ content: "Hello" }), withMarker);
+		expect(written.body).toContain(marker);
+	});
+});
+
+describe("status groups", () => {
+	const vaultWords: MapperOptions = {
+		...options,
+		labels: {
+			status: {
+				todo: ["🟢 Active", "⏳ Awaiting", "⏸️ Paused", "🗄️ Parked"],
+				completed: ["✅ Done"],
+				abandoned: ["🚫 Not Doing"],
+			},
+			statusNeutral: ["📦 Archived"],
+			priority: { none: "⚪ No Priority", low: "🔵 Low", medium: "🟡 Medium", high: "🔴 High" },
+			reminders: {},
+		},
+	};
+
+	it("reads every value in a group as that status", () => {
+		for (const value of ["🟢 Active", "⏳ Awaiting", "⏸️ Paused", "🗄️ Parked"]) {
+			const parsed = noteToTask({ frontmatter: { status: value }, body: "" }, "x", vaultWords);
+			expect({ value, status: parsed.status }).toEqual({ value, status: "todo" });
+		}
+	});
+
+	// The bug this guards: a due-date edit rewriting Paused as Active, because
+	// both mean not-done and nothing about the status actually moved.
+	it("keeps the note's own wording when the status has not changed", () => {
+		const note = taskToNote(task({ status: "todo" }), vaultWords, { currentStatus: "⏸️ Paused" });
+		expect(note.frontmatter.status).toBe("⏸️ Paused");
+	});
+
+	it("writes the group's first value when the status genuinely changes", () => {
+		const note = taskToNote(task({ status: "completed" }), vaultWords, {
+			currentStatus: "⏸️ Paused",
+		});
+		expect(note.frontmatter.status).toBe("✅ Done");
+	});
+
+	it("writes the default when the note has no status yet", () => {
+		expect(taskToNote(task({ status: "todo" }), vaultWords).frontmatter.status).toBe("🟢 Active");
+	});
+
+	// Archiving a finished task must not reopen it, and archiving an open one
+	// must not complete it — so a filing value pushes nothing either way.
+	it("lets a filing value defer to whatever TickTick already says", () => {
+		const parsed = noteToTask(
+			{ frontmatter: { status: "📦 Archived" }, body: "" },
+			"x",
+			vaultWords,
+		);
+		expect(parsed.statusNeutral).toBe(true);
+
+		const done = parsedNoteToTask(parsed, { ...blankTask("p1"), status: "completed" });
+		expect(done.status).toBe("completed");
+
+		const open = parsedNoteToTask(parsed, { ...blankTask("p1"), status: "todo" });
+		expect(open.status).toBe("todo");
 	});
 });
 

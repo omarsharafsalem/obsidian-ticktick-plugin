@@ -16,7 +16,6 @@ import type { OAuthTokens } from "./auth/oauth";
 export interface PropertyNames {
 	id: string;
 	project: string;
-	title: string;
 	status: string;
 	priority: string;
 	due: string;
@@ -35,15 +34,11 @@ export interface PropertyNames {
 	 * registered as a datetime, Obsidian normalises a bare `2026-08-20` to
 	 * include a time, and every all-day task would silently become timed.
 	 */
-	allDay: string;
-	/** Stamped when the task is gone from TickTick but the note is kept. */
-	deleted: string;
 }
 
 export const DEFAULT_PROPERTIES: PropertyNames = {
-	id: "ticktick_id",
-	project: "list",
-	title: "ticktick_title",
+	id: "ticktick_task_id",
+	project: "project",
 	status: "status",
 	priority: "priority",
 	due: "due",
@@ -54,8 +49,6 @@ export const DEFAULT_PROPERTIES: PropertyNames = {
 	completed: "completed",
 	parent: "parent_task",
 	children: "child_tasks",
-	allDay: "all_day",
-	deleted: "ticktick_deleted",
 };
 
 /**
@@ -76,8 +69,6 @@ export const PROPERTY_TYPES: Partial<Record<keyof PropertyNames, string>> = {
 	project: "multitext",
 	parent: "text",
 	children: "multitext",
-	allDay: "checkbox",
-	deleted: "datetime",
 };
 
 /**
@@ -90,17 +81,34 @@ export const PROPERTY_TYPES: Partial<Record<keyof PropertyNames, string>> = {
  * notes read in your language and still push the right codes back.
  */
 export interface ValueLabels {
-	status: Record<TaskStatus, string>;
+	/**
+	 * The values that mean each TickTick status. The first is the one written
+	 * when the status genuinely changes; the rest are recognised and left alone.
+	 *
+	 * TickTick knows three statuses and a working vault usually has more, so this
+	 * is deliberately many-to-one: "Paused" and "Awaiting" both mean not done,
+	 * and neither should be flattened to "Active" just because a due date moved.
+	 */
+	status: Record<TaskStatus, string[]>;
+	/**
+	 * Values describing *filing* rather than progress, e.g. "Archived".
+	 *
+	 * They never drive a change in either direction: archiving a finished task
+	 * must not reopen it, and archiving an open one must not complete it.
+	 */
+	statusNeutral: string[];
 	priority: Record<Priority, string>;
 	/** iCal TRIGGER string to the name you would rather read. */
 	reminders: Record<string, string>;
 }
 
-export const DEFAULT_STATUS_LABELS: Record<TaskStatus, string> = {
-	todo: "todo",
-	completed: "completed",
-	abandoned: "abandoned",
+export const DEFAULT_STATUS_LABELS: Record<TaskStatus, string[]> = {
+	todo: ["todo"],
+	completed: ["completed"],
+	abandoned: ["abandoned"],
 };
+
+export const DEFAULT_NEUTRAL_STATUSES: string[] = [];
 
 export const DEFAULT_PRIORITY_LABELS: Record<Priority, string> = {
 	none: "none",
@@ -129,6 +137,7 @@ export const DEFAULT_REMINDER_LABELS: Record<string, string> = {
 
 export const DEFAULT_VALUE_LABELS: ValueLabels = {
 	status: { ...DEFAULT_STATUS_LABELS },
+	statusNeutral: [...DEFAULT_NEUTRAL_STATUSES],
 	priority: { ...DEFAULT_PRIORITY_LABELS },
 	reminders: { ...DEFAULT_REMINDER_LABELS },
 };
@@ -201,6 +210,27 @@ export interface TickTickSyncSettings {
 	projectFilter: string[];
 
 	/**
+	 * Where a note goes when its task is deleted in TickTick.
+	 *
+	 * The folder is the record that the task is gone, which is why no property
+	 * marks it. A setting rather than a constant so it can follow a vault's own
+	 * structure — this plugin should work in any vault, not one.
+	 */
+	deletedTaskFolder: string;
+
+	/**
+	 * Ends the part of the note body that syncs to TickTick.
+	 *
+	 * Everything after this line is never read or written, so a task can carry
+	 * as much writing as it needs without any of it reaching TickTick. A note
+	 * with no marker syncs its whole body, which is what older notes expect.
+	 */
+	syncedRegionMarker: string;
+
+	/** Put a link back to the note in the TickTick task's description. */
+	linkBackToNote: boolean;
+
+	/**
 	 * Where each list's notes are created, keyed by project id.
 	 *
 	 * A list with no entry falls back to {@link taskFolder}, so this can be set
@@ -271,11 +301,15 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	projectFilter: [],
 	listFolders: {},
 	listPages: {},
+	deletedTaskFolder: "🗄️ Archive",
+	syncedRegionMarker: "<!-- ticktick:end -->",
+	linkBackToNote: true,
 	dateProperties: "datetime",
 	syncCompletedTasks: false,
 	properties: { ...DEFAULT_PROPERTIES },
 	labels: {
 		status: { ...DEFAULT_STATUS_LABELS },
+		statusNeutral: [...DEFAULT_NEUTRAL_STATUSES],
 		priority: { ...DEFAULT_PRIORITY_LABELS },
 		reminders: { ...DEFAULT_REMINDER_LABELS },
 	},
@@ -312,6 +346,7 @@ export function mergeSettings(stored: unknown): TickTickSyncSettings {
 		taskMarker: { ...DEFAULT_SETTINGS.taskMarker, ...(raw.taskMarker ?? {}) },
 		labels: {
 			status: { ...DEFAULT_STATUS_LABELS, ...(raw.labels?.status ?? {}) },
+			statusNeutral: [...(raw.labels?.statusNeutral ?? DEFAULT_NEUTRAL_STATUSES)],
 			priority: { ...DEFAULT_PRIORITY_LABELS, ...(raw.labels?.priority ?? {}) },
 			// Merged rather than replaced, so adding a custom TRIGGER keeps the
 			// built-in names working.

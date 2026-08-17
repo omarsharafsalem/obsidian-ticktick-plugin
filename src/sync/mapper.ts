@@ -44,6 +44,22 @@ export interface NoteContext {
 	parent?: TaskLink;
 	/** Derived from whichever tasks point at this one; never read back. */
 	children?: TaskLink[];
+	/** What the note's status property says now, so an equivalent value survives. */
+	currentStatus?: string;
+	/** Text below the marker, preserved exactly as the user left it. */
+	privateBody?: string;
+}
+
+/**
+ * True when a frontmatter date means a whole day rather than a moment.
+ *
+ * A bare `2026-08-20` is unambiguous. Exactly midnight counts as well, because
+ * a datetime-typed property makes Obsidian rewrite bare dates to include a
+ * time — without this every all-day task would look scheduled for 00:00.
+ */
+function looksLikeWholeDay(raw: unknown, iso: string): boolean {
+	if (looksAllDay(raw)) return true;
+	return iso.endsWith("T00:00:00.000Z");
 }
 
 /** `[[path|title]]` when disambiguation is needed, `[[title]]` otherwise. */
@@ -89,6 +105,8 @@ export interface MapperOptions {
 	 * rule as notes written by hand rather than only by where they sit.
 	 */
 	marker?: { property: string; value: string };
+	/** Ends the synced part of the body; everything after it is untouched. */
+	syncedRegionMarker?: string;
 }
 
 export const DEFAULT_MAPPER_OPTIONS: MapperOptions = {
@@ -114,6 +132,33 @@ function matchLabel<T extends string>(
 	return undefined;
 }
 
+/** As {@link matchLabel}, but each status owns several accepted spellings. */
+function matchStatusLabel(written: string, labels: ValueLabels): TaskStatus | undefined {
+	const wanted = written.trim().toLowerCase();
+	for (const [canonical, spellings] of Object.entries(labels.status) as [TaskStatus, string[]][]) {
+		if (spellings.some((value) => value.trim().toLowerCase() === wanted)) return canonical;
+	}
+	return undefined;
+}
+
+function isNeutralStatus(written: string, labels: ValueLabels): boolean {
+	const wanted = written.trim().toLowerCase();
+	return labels.statusNeutral.some((value) => value.trim().toLowerCase() === wanted);
+}
+
+/**
+ * What to write for a status, preferring what the note already says.
+ *
+ * A note reading "Paused" must not become "Active" just because something else
+ * about the task changed — TickTick still calls both "not done", so nothing
+ * about the status actually moved.
+ */
+function statusToWrite(status: TaskStatus, labels: ValueLabels, current?: string): string {
+	const spellings = labels.status[status] ?? [];
+	if (current && matchStatusLabel(current, labels) === status) return current;
+	return spellings[0] ?? status;
+}
+
 export interface NoteContent {
 	frontmatter: Record<string, unknown>;
 	body: string;
@@ -123,6 +168,15 @@ export interface ParsedNote {
 	/** Undefined for a note the user wrote by hand that has never synced. */
 	id?: string;
 	projectId?: string;
+	/**
+	 * The status describes filing, not progress — "Archived" and the like.
+	 *
+	 * Nothing should be pushed for it: archiving a finished task must not reopen
+	 * it, and archiving an open one must not complete it.
+	 */
+	statusNeutral?: boolean;
+	/** Everything below the marker, kept so a write can put it back untouched. */
+	privateBody: string;
 	/**
 	 * True when the parent property holds a link that could not be resolved.
 	 *
@@ -180,14 +234,33 @@ function renderChecklist(items: ChecklistItem[]): string {
  * lines inside that section are dropped on the next write, which is why the
  * heading is documented as plugin-owned.
  */
-export function splitBody(body: string): { content: string; items: ChecklistItem[] } {
-	const lines = body.split("\n");
+export function splitBody(
+	body: string,
+	marker?: string,
+): { content: string; items: ChecklistItem[]; privateBody: string } {
+	// Everything past the marker belongs to the user. Split it off before
+	// anything else looks at the body, so nothing below can be parsed, matched
+	// or rewritten — that is the whole guarantee the marker exists to give.
+	let synced = body;
+	let privateBody = "";
+
+	const wanted = marker?.trim();
+	if (wanted) {
+		const all = body.split("\n");
+		const at = all.findIndex((line) => line.trim() === wanted);
+		if (at !== -1) {
+			synced = all.slice(0, at).join("\n");
+			privateBody = all.slice(at + 1).join("\n");
+		}
+	}
+
+	const lines = synced.split("\n");
 	const headingIndex = lines.findIndex(
 		(line) => line.trim().toLowerCase() === SUBTASK_HEADING.toLowerCase(),
 	);
 
 	if (headingIndex === -1) {
-		return { content: body.trim(), items: [] };
+		return { content: synced.trim(), items: [], privateBody };
 	}
 
 	const content = lines.slice(0, headingIndex).join("\n").trim();
@@ -201,10 +274,26 @@ export function splitBody(body: string): { content: string; items: ChecklistItem
 		items.push({ title, completed: match[1].toLowerCase() === "x" });
 	}
 
-	return { content, items };
+	return { content, items, privateBody };
 }
 
-export function buildBody(content: string, items: ChecklistItem[]): string {
+export function buildBody(
+	content: string,
+	items: ChecklistItem[],
+	options: { marker?: string; privateBody?: string } = {},
+): string {
+	const synced = buildSyncedRegion(content, items);
+	const marker = options.marker?.trim();
+	if (!marker) return synced;
+
+	// The marker is always emitted, so the boundary is visible from the first
+	// write rather than appearing only once there is something below it.
+	const below = options.privateBody ?? "";
+	const head = synced.length > 0 ? `${synced.trimEnd()}\n\n` : "";
+	return below.trim().length > 0 ? `${head}${marker}\n${below}` : `${head}${marker}\n`;
+}
+
+function buildSyncedRegion(content: string, items: ChecklistItem[]): string {
 	const trimmed = content.trim();
 	if (items.length === 0) {
 		return trimmed.length > 0 ? `${trimmed}\n` : "";
@@ -229,24 +318,19 @@ export function taskToNote(
 		[p.project]: context.projectLink
 			? formatWikilink(context.projectLink)
 			: (projectName ?? task.projectId),
-		[p.status]: labels.status[task.status] ?? task.status,
+		[p.status]: statusToWrite(task.status, labels, context.currentStatus),
 		[p.priority]: labels.priority[task.priority] ?? task.priority,
 	};
 
-	// The etag is a server version token and deliberately never reaches the
-	// note — it is bookkeeping, kept in the plugin's own state instead.
-	if (titleNeedsFrontmatter(task.title)) frontmatter[p.title] = task.title;
+	// The etag, the all-day flag and a title a filename cannot hold are all kept
+	// in the plugin's own state rather than the note. They are bookkeeping, and
+	// a vault should not grow properties to carry them.
 
 	const marker = options.marker;
 	if (marker?.property.trim()) frontmatter[marker.property.trim()] = marker.value;
 
 	const due = toFrontmatterDate(task.dueDate, task.isAllDay);
 	if (due) frontmatter[p.due] = due;
-
-	// Recorded explicitly rather than left to be inferred from the date's shape:
-	// with `due` registered as a datetime, Obsidian rewrites a bare date to
-	// include a time, and the task would look scheduled when it is not.
-	if (task.isAllDay) frontmatter[p.allDay] = true;
 
 	const start = toFrontmatterDate(task.startDate, task.isAllDay);
 	if (start) frontmatter[p.start] = start;
@@ -275,7 +359,13 @@ export function taskToNote(
 	}
 	if (task.completedTime) frontmatter[p.completed] = task.completedTime;
 
-	return { frontmatter, body: buildBody(task.content, task.items) };
+	return {
+		frontmatter,
+		body: buildBody(task.content, task.items, {
+			marker: options.syncedRegionMarker,
+			privateBody: context.privateBody,
+		}),
+	};
 }
 
 function readTags(value: unknown): string[] {
@@ -364,7 +454,7 @@ function readStatus(raw: unknown, completedAt: unknown, labels?: ValueLabels): T
 	// Your own vocabulary wins, so a vault that calls it "Done" round-trips.
 	// The built-in spellings below stay as a fallback for hand-written notes.
 	if (typeof value === "string" && labels) {
-		const matched = matchLabel(value, labels.status);
+		const matched = matchStatusLabel(value, labels);
 		if (matched) return matched;
 	}
 
@@ -427,22 +517,20 @@ export function noteToTask(
 	const p = options.properties;
 	const labels = options.labels ?? DEFAULT_VALUE_LABELS;
 	const fm = note.frontmatter ?? {};
-	const { content, items } = splitBody(note.body);
+	const { content, items, privateBody } = splitBody(note.body, options.syncedRegionMarker);
 
 	const dueRaw = fm[p.due];
 	const startRaw = fm[p.start];
 	const dueDate = fromFrontmatterDate(dueRaw);
 	const startDate = fromFrontmatterDate(startRaw);
 
-	// A date written without a time means an all-day task.
-	// The explicit flag wins. Falling back to the date's shape keeps notes
-	// written before the property existed, and hand-written ones, working.
-	const allDayFlag = readScalar(fm[p.allDay]);
+	// All-day is read from the shape of the date. A bare date is unambiguous;
+	// exactly midnight counts too, because a datetime-typed property makes
+	// Obsidian rewrite `2026-08-20` as `2026-08-20T00:00`. The engine overrides
+	// this from the last-agreed state when the date has not actually changed.
 	const isAllDay =
-		typeof allDayFlag === "boolean"
-			? allDayFlag
-			: (dueDate !== undefined && looksAllDay(dueRaw)) ||
-				(dueDate === undefined && startDate !== undefined && looksAllDay(startRaw));
+		(dueDate !== undefined && looksLikeWholeDay(dueRaw, dueDate)) ||
+		(dueDate === undefined && startDate !== undefined && looksLikeWholeDay(startRaw, startDate));
 
 	const propertyTags = readTags(fm[p.tags]);
 	// Inline tags are unioned in, so `#work🔥` typed in the body reaches TickTick
@@ -462,10 +550,15 @@ export function noteToTask(
 			: (options.resolveProject?.(projectRef) ?? projectRef)
 		: undefined;
 
+	const statusRaw = readScalar(fm[p.status]);
+	const statusNeutral = typeof statusRaw === "string" && isNeutralStatus(statusRaw, labels);
+
 	return {
 		id: readString(fm[p.id]),
 		projectId,
-		title: readString(fm[p.title]) ?? filenameTitle,
+		statusNeutral,
+		privateBody,
+		title: filenameTitle,
 		content,
 		status: readStatus(fm[p.status], fm[p.completed], labels),
 		priority: readPriority(fm[p.priority], labels),
@@ -569,7 +662,6 @@ export function parsedNoteToTask(parsed: ParsedNote, base: Task): Task {
 		...base,
 		title: parsed.title,
 		content: parsed.content,
-		status: parsed.status,
 		priority: parsed.priority,
 		tags: parsed.tags,
 		dueDate: parsed.dueDate,
@@ -580,6 +672,9 @@ export function parsedNoteToTask(parsed: ParsedNote, base: Task): Task {
 		// An unresolvable link leaves the existing parent alone rather than
 		// dropping it — see readParent.
 		parentId: parsed.parentUnresolved ? base.parentId : parsed.parentId,
+		// A filing value such as "Archived" says nothing about progress, so
+		// whatever TickTick already believes is kept.
+		status: parsed.statusNeutral ? base.status : parsed.status,
 		items: parsed.items,
 		projectId: parsed.projectId ?? base.projectId,
 	};
