@@ -68,7 +68,12 @@ export interface ReconcileOptions {
 	noteConfirmedGone?: boolean;
 	/** Epoch ms of the note's last modification, when known. */
 	localModifiedAt?: number;
-	/** Epoch ms of the remote task's last modification, when known. */
+	/**
+	 * Epoch ms of the remote task's last modification, when known.
+	 *
+	 * Passed in rather than looked up: this module decides policy and touches
+	 * neither the vault nor the sync state.
+	 */
 	remoteModifiedAt?: number;
 	/**
 	 * Fields for which `base` holds a meaningful value. Omit to treat the whole
@@ -192,8 +197,8 @@ function conflictWinner(options: ReconcileOptions): "local" | "remote" {
 		return localModifiedAt >= remoteModifiedAt ? "local" : "remote";
 	}
 
-	// The official API reports no modification time, so "newest" is not
-	// answerable. Favour the server, which is the side other devices also see.
+	// One of the two times is missing, so "newest" cannot be answered at all.
+	// Favour the server, which is the side other devices also see.
 	return "remote";
 }
 

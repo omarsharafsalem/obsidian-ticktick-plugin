@@ -18,14 +18,23 @@ export const OPEN_API_BASE = "https://api.ticktick.com/open/v1";
 /**
  * The Open API is much less limited than it is often described.
  *
- * It lists completed tasks (`POST /task/completed`) and reaches the Inbox
- * through `POST /task/filter` with the reserved id below. The one genuine gap
- * is a per-task modification time, which no endpoint returns.
+ * It lists completed tasks (`POST /task/completed`), reaches the Inbox through
+ * `POST /task/filter` with the reserved id below, and — measured against the
+ * live API on 18 Aug 2026 — returns a real `modifiedTime` on every task from
+ * `GET /project/{id}/data`, e.g. `2026-08-17T19:01:17.084+0000`.
+ *
+ * That last point is worth stating plainly because the opposite is widely
+ * repeated, and believing it costs the plugin "most recently edited wins":
+ * with no modification time the reconciler cannot date a remote edit at all
+ * and hands the server every conflict.
  */
 const OPEN_API_CAPABILITIES: Capabilities = {
 	completedHistory: true,
-	modifiedTime: false,
+	modifiedTime: true,
 	inbox: true,
+	// No cap has been established for `GET /project/{id}/data`. Left unset
+	// deliberately: a guessed one would either disable deletion detection for a
+	// legitimately sized list or fail to fire when it mattered.
 };
 
 /** TickTick's reserved project id for the Inbox, accepted by the filter endpoint. */
@@ -267,6 +276,10 @@ export class OpenApiClient implements TickTickClient {
 	async listTasksInProject(projectId: string): Promise<Task[]> {
 		// The Inbox has no `/project/{id}/data` endpoint; the filter endpoint is
 		// the only route to it. That caps the Inbox at 200 tasks per sync.
+		//
+		// Only the Inbox. `POST /task/filter` answers 500 `unknown_exception` for
+		// a real project id — measured against the live API on 18 Aug 2026 — so
+		// it is not an alternative to the per-project listing for anything else.
 		if (projectId === INBOX_PROJECT_ID) {
 			const raw = await this.send("POST", "/task/filter", {
 				projectIds: [INBOX_PROJECT_ID],

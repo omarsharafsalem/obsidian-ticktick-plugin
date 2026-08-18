@@ -152,13 +152,16 @@ export class SyncEngine {
 			const projectNames = new Map(projects.map((p) => [p.id, p.name]));
 			this.inboxAliases.clear();
 			this.completedFetched = false;
-			const remote = await this.loadRemoteTasks(projects, report);
+			const { remote, listed } = await this.loadRemoteTasks(projects, report);
 
 			// Fold in any real id discovered while reading tasks, so a task in the
 			// Inbox resolves to its name and to any folder mapped for it.
 			for (const [realId, listedId] of this.inboxAliases) {
 				const name = projectNames.get(listedId);
 				if (name && !projectNames.has(realId)) projectNames.set(realId, name);
+				// The alias inherits the standing of the list it aliases, or a task
+				// filed in the Inbox would look like it belongs to a list nobody read.
+				if (listed.has(listedId)) listed.add(realId);
 			}
 			this.links = this.buildLinkIndex(remote, projectNames);
 			const local = await this.loadLocalNotes(report, projectNames);
@@ -174,7 +177,10 @@ export class SyncEngine {
 				local,
 				projectNames,
 				report,
-				syncedProjects: new Set(projectNames.keys()),
+				// The lists actually read this pass, not the lists we meant to read.
+				// A list that failed tells us nothing about its tasks, and treating
+				// it as read makes every note behind that one failure look deleted.
+				syncedProjects: listed,
 			});
 			await this.createUnlinkedNotes(local, remote, projectNames, report);
 
@@ -202,12 +208,36 @@ export class SyncEngine {
 	private async loadRemoteTasks(
 		projects: Project[],
 		report: SyncReport,
-	): Promise<Map<string, RemoteRecord>> {
+	): Promise<{ remote: Map<string, RemoteRecord>; listed: Set<string> }> {
 		const remote = new Map<string, RemoteRecord>();
+		const listed = new Set<string>();
+		const pageSize = this.deps.client.capabilities.listPageSize;
 
 		for (const project of projects) {
 			try {
-				for (const task of await this.deps.client.listTasksInProject(project.id)) {
+				const tasks = await this.deps.client.listTasksInProject(project.id);
+
+				// Marked read only once the call has returned, and only when it
+				// plainly returned everything. A listing filled exactly to the
+				// backend's limit may have more behind it that nothing reports, and
+				// reading a tail we never received as deletions is how this plugin
+				// has destroyed real data before.
+				//
+				// Whether there is a limit at all is the backend's to declare. The
+				// Open API's per-project listing has no established one, so this
+				// does not fire there today; it is the mechanism that makes a cap
+				// safe to have, not a claim that one exists.
+				if (pageSize !== undefined && tasks.length >= pageSize) {
+					report.errors.push(
+						`List "${project.name}" has at least ${pageSize} open tasks, which is as many as ` +
+							"TickTick will return at once. Its tasks were synced, but none of them were " +
+							"treated as deleted, because the rest of the list could not be seen.",
+					);
+				} else {
+					listed.add(project.id);
+				}
+
+				for (const task of tasks) {
 					if (!task.id) continue;
 					// The Inbox is listed under a reserved id, but its tasks come back
 					// carrying the account's real one — so nothing downstream matches
@@ -218,7 +248,10 @@ export class SyncEngine {
 					remote.set(task.id, { task, snapshot: toSnapshot(task) });
 				}
 			} catch (error) {
-				report.errors.push(`Failed to read list "${project.name}": ${describeError(error)}`);
+				report.errors.push(
+					`Failed to read list "${project.name}", so its tasks were left untouched: ` +
+						describeError(error),
+				);
 			}
 		}
 
@@ -251,14 +284,17 @@ export class SyncEngine {
 		}
 
 		this.deps.log("Fetched from TickTick", {
-			lists: projects.map((p) => p.name),
+			lists: projects.filter((p) => listed.has(p.id)).map((p) => p.name),
+			// Kept apart from the rest, because a note left untouched this pass is
+			// explained by this line and by nothing else in the log.
+			listsNotRead: projects.filter((p) => !listed.has(p.id)).map((p) => p.name),
 			tasks: remote.size,
 			// Titles and ids together, so a note that reappeared can be checked
 			// against what the account actually still holds.
 			titles: [...remote.values()].map((r) => `${r.task.title} — ${r.task.id}`),
 		});
 
-		return remote;
+		return { remote, listed };
 	}
 
 	private async loadLocalNotes(
@@ -506,7 +542,7 @@ export class SyncEngine {
 
 		const entry = store.get(taskId);
 		const localNote = localById.get(taskId);
-		let remoteRecord = remote.get(taskId);
+		const remoteRecord = remote.get(taskId);
 
 		// Nothing on either side. Whatever was being tracked is finished with, so
 		// stop tracking it rather than reasoning about which side went first.
@@ -564,10 +600,15 @@ export class SyncEngine {
 		//
 		// If the completed list could not be read, absence proves nothing and the
 		// task is left entirely alone.
-		if (!remoteRecord && entry && localNote && !this.completedFetched) {
+		// Deliberately not conditioned on there being a sync entry. A note can
+		// carry a task id with nothing tracked against it — after a state reset,
+		// or a re-link that has not landed yet — and it is treated as linked
+		// everywhere else, so letting it past here archived notes on exactly the
+		// pass that had the least evidence for doing so.
+		if (!remoteRecord && localNote && !this.completedFetched) {
 			report.errors.push(
-				`Could not read completed tasks, so "${entry.notePath}" was left untouched — its task ` +
-					"may have been finished rather than deleted.",
+				`Could not read completed tasks, so "${localNote.file.path}" was left untouched — its ` +
+					"task may have been finished rather than deleted.",
 			);
 			return;
 		}

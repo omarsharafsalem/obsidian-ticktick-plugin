@@ -13,12 +13,22 @@ export interface Capabilities {
 	/**
 	 * Reports a per-task last-modified timestamp.
 	 *
-	 * The Open API does not, so "most recently edited wins" is answered instead
-	 * from when a remote change was first *observed* — see `SyncStore`.
+	 * Without one, "most recently edited wins" cannot be answered and every
+	 * conflict falls to the server. The Open API does report it, contrary to
+	 * how it is usually described — see `OPEN_API_CAPABILITIES`.
 	 */
 	modifiedTime: boolean;
 	/** Can enumerate the Inbox alongside ordinary projects. */
 	inbox: boolean;
+	/**
+	 * Most tasks one call to {@link TickTickClient.listTasksInProject} can
+	 * return, where the backend caps it. Omitted when there is no cap.
+	 *
+	 * A list that comes back exactly this full may have been cut off, and
+	 * nothing says so — so the engine treats it as only partly read rather than
+	 * mistaking the tail it never received for tasks that were deleted.
+	 */
+	listPageSize?: number;
 }
 
 export interface TickTickClient {
