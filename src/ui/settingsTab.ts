@@ -472,6 +472,24 @@ export class TickTickSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(root)
+			.setName("Property saying what kind of note this is")
+			.setDesc(
+				"Leave empty and the marker above does both jobs, which is the ordinary case. Set a " +
+					"different property and a note can be a task and something else at once — a study " +
+					"topic that is also scheduled, say. The marker answers \"the plugin owns this\"; " +
+					"this answers what it is. The value comes from the list's kind routing.",
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("e.g. note_type")
+					.setValue(settings.noteTypeProperty)
+					.onChange(async (value) => {
+						settings.noteTypeProperty = value.trim();
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(root)
 			.setName("Add an alias for titles a filename cannot hold")
 			.setDesc(
 				"Some titles cannot be a filename — a colon or a slash, or a second task with the " +

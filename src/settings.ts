@@ -292,6 +292,18 @@ export interface TickTickSyncSettings {
 	taskMarker: { property: string; value: string };
 
 	/**
+	 * The property saying what kind of note this is, when that is not the marker.
+	 *
+	 * Left empty, the marker does both jobs and nothing changes. Set to a
+	 * different property and a note can be a task *and* something else at once —
+	 * the marker answers "the plugin owns this", this answers "what it is".
+	 *
+	 * The value written comes from the list's kind routing, so a notes list and
+	 * a task list can describe themselves differently.
+	 */
+	noteTypeProperty: string;
+
+	/**
 	 * Look for task notes across the whole vault rather than under
 	 * {@link taskFolder}. Requires a marker, or every note would be a task.
 	 */
@@ -514,6 +526,7 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	},
 	syncingStarted: false,
 	taskMarker: { property: "", value: "task" },
+	noteTypeProperty: "",
 	discoverAnywhere: false,
 	taskFolder: "Tasks",
 	folderPerProject: true,

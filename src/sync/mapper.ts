@@ -177,6 +177,17 @@ export interface MapperOptions {
 	 * rule as notes written by hand rather than only by where they sit.
 	 */
 	marker?: { property: string; value: string };
+	/**
+	 * A second property describing what kind of note this is, written alongside
+	 * the marker when the two are not the same property.
+	 *
+	 * They usually are. But a note can be a task *and* something else — a study
+	 * topic that is also scheduled, say — and then one property has to answer
+	 * "is this a task" while another answers "what kind of note is this".
+	 * Collapsing both into one forces a choice between being recognised by the
+	 * plugin and being visible in the vault's own views.
+	 */
+	noteType?: { property: string; value: string };
 	/** Ends the synced part of the body; everything after it is untouched. */
 	syncedRegionMarker?: string;
 	/**
@@ -529,6 +540,14 @@ export function taskToNote(
 
 	const marker = options.marker;
 	if (marker?.property.trim()) frontmatter[marker.property.trim()] = marker.value;
+
+	// Written second, and never over the marker: if they name the same property
+	// the marker wins, because that is the one the plugin reads back.
+	const kindOf = options.noteType;
+	const kindProp = kindOf?.property.trim();
+	if (kindOf && kindProp && kindProp !== marker?.property.trim() && kindOf.value !== "") {
+		frontmatter[kindProp] = kindOf.value;
+	}
 
 	const displayZone = options.useTaskTimeZone ? task.timeZone : undefined;
 	const due = toFrontmatterDate(task.dueDate, task.isAllDay, displayZone);

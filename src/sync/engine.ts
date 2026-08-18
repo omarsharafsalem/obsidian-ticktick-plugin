@@ -1681,6 +1681,14 @@ export class SyncEngine {
 				// task. Same property, different value — one vocabulary, not two.
 				marker: {
 					property: settings.taskMarker.property,
+					value: settings.noteTypeProperty.trim()
+						? settings.taskMarker.value
+						: this.routingFor(task.projectId).noteType,
+				},
+				// Only when it is a property of its own. Sharing one property with
+				// the marker is the ordinary case and needs nothing extra.
+				noteType: {
+					property: settings.noteTypeProperty,
 					value: this.routingFor(task.projectId).noteType,
 				},
 				syncedRegionMarker: settings.syncedRegionMarker,

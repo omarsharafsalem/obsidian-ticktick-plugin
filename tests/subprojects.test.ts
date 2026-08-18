@@ -281,3 +281,50 @@ describe("which folders get scanned", () => {
 		expect(dedupeFolders(["Tasks", "Tasks", " Tasks "])).toEqual(["Tasks"]);
 	});
 });
+
+// A note can be a task *and* something else — a study topic that is also
+// scheduled. One property answers "the plugin owns this", another answers
+// "what kind of note is this". Collapsed into one, a topic note has to choose
+// between being recognised by the plugin and being visible in the vault's views.
+describe("a task that is also another kind of note", () => {
+	const t = () => ({ ...blankTask("p1"), id: "t1", title: "Hyponatraemia" }) as Task;
+
+	it("writes both when they are separate properties", () => {
+		const fm = taskToNote(t(), {
+			...DEFAULT_MAPPER_OPTIONS,
+			marker: { property: "is_task", value: "true" },
+			noteType: { property: "note_type", value: "🗺️ topic" },
+		}).frontmatter;
+		expect(fm["is_task"]).toBe("true");
+		expect(fm["note_type"]).toBe("🗺️ topic");
+	});
+
+	// The ordinary case, and the default: one property doing both jobs.
+	it("writes one when they name the same property", () => {
+		const fm = taskToNote(t(), {
+			...DEFAULT_MAPPER_OPTIONS,
+			marker: { property: "note_type", value: "📌 task" },
+			noteType: { property: "note_type", value: "📌 task" },
+		}).frontmatter;
+		expect(fm["note_type"]).toBe("📌 task");
+	});
+
+	// The marker is what the plugin reads back, so it must never be overwritten.
+	it("never lets the note type overwrite the marker", () => {
+		const fm = taskToNote(t(), {
+			...DEFAULT_MAPPER_OPTIONS,
+			marker: { property: "note_type", value: "📌 task" },
+			noteType: { property: "note_type", value: "🗺️ topic" },
+		}).frontmatter;
+		expect(fm["note_type"]).toBe("📌 task");
+	});
+
+	it("writes nothing extra when no note type is configured", () => {
+		const fm = taskToNote(t(), {
+			...DEFAULT_MAPPER_OPTIONS,
+			marker: { property: "is_task", value: "true" },
+			noteType: { property: "", value: "" },
+		}).frontmatter;
+		expect(fm).not.toHaveProperty("note_type");
+	});
+});
