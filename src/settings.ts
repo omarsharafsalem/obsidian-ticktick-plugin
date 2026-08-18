@@ -200,6 +200,49 @@ export const DEFAULT_LIST_KINDS: Record<ProjectKind, KindRouting> = {
 	NOTE: { folder: "", noteType: "" },
 };
 
+/**
+ * How a repeating task's finished occurrences are recorded.
+ *
+ * Completing a repeating task leaves the live task exactly where it was — same
+ * id, due date rolled forward, status back to open — and files a separate
+ * record for the occurrence that was finished, with an id of its own. That
+ * record is a real task, so one note per task would give it a note. Which is
+ * what you want from a weekly review, and not at all what you want from a daily
+ * habit: "something that recurs weekly, I don't mind having a note every week,
+ * but something that recurs daily would just clutter things up."
+ */
+export interface RecurrenceSettings {
+	/**
+	 * Occurrences at least this many days apart get a note each. Anything more
+	 * frequent is logged in the repeating task's own note instead.
+	 */
+	thresholdDays: number;
+
+	/**
+	 * Frontmatter property that overrides the frequency rule for one task.
+	 *
+	 * `note` gives every occurrence its own note; `log` records them all in this
+	 * note. Anything else is ignored, so a typo falls back to the frequency rule
+	 * rather than quietly moving where completions are written. Never written by
+	 * the plugin — it is yours to set and yours to remove.
+	 */
+	overrideProperty: string;
+
+	/**
+	 * Most occurrence notes one sync may create. Zero removes the limit.
+	 *
+	 * The completed listing reaches back ninety days, so the first sync of a task
+	 * that repeats often would otherwise create a note per occurrence all at once.
+	 */
+	maxOccurrenceNotesPerSync: number;
+}
+
+export const DEFAULT_RECURRENCE_SETTINGS: RecurrenceSettings = {
+	thresholdDays: 7,
+	overrideProperty: "recurrence_occurrences",
+	maxOccurrenceNotesPerSync: 20,
+};
+
 export interface AuthSettings {
 	/**
 	 * A token created in TickTick under Settings > Account > API Token.
@@ -407,6 +450,9 @@ export interface TickTickSyncSettings {
 	completedHandling: CompletedHandling;
 	archiveFolder: string;
 
+	/** What a repeating task's finished occurrences become. */
+	recurrence: RecurrenceSettings;
+
 	debugLogging: boolean;
 }
 
@@ -456,6 +502,7 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	passesBeforeDeletingTask: 2,
 	completedHandling: "keep",
 	archiveFolder: "Tasks/Archive",
+	recurrence: { ...DEFAULT_RECURRENCE_SETTINGS },
 	debugLogging: false,
 };
 
@@ -589,6 +636,7 @@ export function mergeSettings(stored: unknown, storedState?: unknown): TickTickS
 		},
 		hiddenProperties: [...(raw.hiddenProperties ?? DEFAULT_SETTINGS.hiddenProperties)],
 		taskMarker: { ...DEFAULT_SETTINGS.taskMarker, ...(raw.taskMarker ?? {}) },
+		recurrence: { ...DEFAULT_RECURRENCE_SETTINGS, ...(raw.recurrence ?? {}) },
 		labels: {
 			status: {
 				todo: toStatusList(raw.labels?.status?.todo, DEFAULT_STATUS_LABELS.todo),

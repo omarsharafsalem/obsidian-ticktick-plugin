@@ -1,6 +1,7 @@
 import { fromFrontmatterDate, looksAllDay, toFrontmatterDate } from "../util/dates";
 import { extractTags, normaliseTag, parseTagList } from "../util/tags";
 import { DEFAULT_PROPERTIES, DEFAULT_VALUE_LABELS, type PropertyNames, type ValueLabels } from "../settings";
+import { COMPLETION_HEADING } from "./recurrence";
 import type { ChecklistItem, Priority, Task, TaskStatus } from "../api/types";
 
 /**
@@ -48,6 +49,13 @@ export interface NoteContext {
 	currentStatus?: string;
 	/** Text below the marker, preserved exactly as the user left it. */
 	privateBody?: string;
+	/**
+	 * The completion log of a frequently repeating task, put back on every write.
+	 *
+	 * Nothing here comes from the task, so it has to be handed back in or the
+	 * first ordinary update would rewrite the note without it.
+	 */
+	completions?: string[];
 }
 
 /**
@@ -242,6 +250,8 @@ export interface ParsedNote {
 	statusNeutral?: boolean;
 	/** Everything below the marker, kept so a write can put it back untouched. */
 	privateBody: string;
+	/** The completion log the note holds, for the same reason. */
+	completions: string[];
 	/**
 	 * True when the parent property holds a link that could not be resolved.
 	 *
@@ -307,17 +317,23 @@ function renderChecklist(items: ChecklistItem[]): string {
 }
 
 /**
- * Splits a note body into description and checklist.
+ * Splits a note body into description, checklist and completion log.
  *
- * The `## Subtasks` heading is the boundary: text before it is the task
- * description, checkbox lines after it become checklist items. Non-checkbox
- * lines inside that section are dropped on the next write, which is why the
- * heading is documented as plugin-owned.
+ * The plugin-owned headings are the boundaries: text before the first of them
+ * is the task description, checkbox lines under `## Subtasks` become checklist
+ * items, and dashed lines under `## Completions` are the log of a repeating
+ * task's finished occurrences. Anything else inside those sections is dropped
+ * on the next write, which is why the headings are documented as plugin-owned.
+ *
+ * The completion log is deliberately taken out of the description rather than
+ * left in it. It belongs to the vault — it is what a frequent repeat gets
+ * instead of a note per occurrence — and folding it into `content` would push
+ * the whole history into the TickTick task's description on the next sync.
  */
 export function splitBody(
 	body: string,
 	marker?: string,
-): { content: string; items: ChecklistItem[]; privateBody: string } {
+): { content: string; items: ChecklistItem[]; privateBody: string; completions: string[] } {
 	// Everything past the marker belongs to the user. Split it off before
 	// anything else looks at the body, so nothing below can be parsed, matched
 	// or rewritten — that is the whole guarantee the marker exists to give.
@@ -335,34 +351,55 @@ export function splitBody(
 	}
 
 	const lines = synced.split("\n");
-	const headingIndex = lines.findIndex(
-		(line) => line.trim().toLowerCase() === SUBTASK_HEADING.toLowerCase(),
-	);
+	const headingAt = (heading: string): number =>
+		lines.findIndex((line) => line.trim().toLowerCase() === heading.toLowerCase());
 
-	if (headingIndex === -1) {
-		return { content: synced.trim(), items: [], privateBody };
-	}
+	const subtasksAt = headingAt(SUBTASK_HEADING);
+	const completionsAt = headingAt(COMPLETION_HEADING);
+	const headings = [subtasksAt, completionsAt].filter((at) => at !== -1);
 
-	const content = lines.slice(0, headingIndex).join("\n").trim();
+	// A section runs to the next plugin-owned heading, so the two can appear in
+	// either order without one swallowing the other.
+	const endOf = (start: number): number => {
+		const later = headings.filter((at) => at > start);
+		return later.length > 0 ? Math.min(...later) : lines.length;
+	};
+
+	const content =
+		headings.length > 0
+			? lines.slice(0, Math.min(...headings)).join("\n").trim()
+			: synced.trim();
+
 	const items: ChecklistItem[] = [];
-
-	for (const line of lines.slice(headingIndex + 1)) {
-		const match = /^\s*[-*]\s+\[([ xX])\]\s*(.*)$/.exec(line);
-		if (!match) continue;
-		const title = match[2].trim();
-		if (!title) continue;
-		items.push({ title, completed: match[1].toLowerCase() === "x" });
+	if (subtasksAt !== -1) {
+		for (const line of lines.slice(subtasksAt + 1, endOf(subtasksAt))) {
+			const match = /^\s*[-*]\s+\[([ xX])\]\s*(.*)$/.exec(line);
+			if (!match) continue;
+			const title = match[2].trim();
+			if (!title) continue;
+			items.push({ title, completed: match[1].toLowerCase() === "x" });
+		}
 	}
 
-	return { content, items, privateBody };
+	// Read back trimmed, because the trimmed form is what is written and what a
+	// re-sync compares against — matching on it is what keeps appending idempotent.
+	const completions: string[] = [];
+	if (completionsAt !== -1) {
+		for (const line of lines.slice(completionsAt + 1, endOf(completionsAt))) {
+			const trimmed = line.trim();
+			if (trimmed.startsWith("- ")) completions.push(trimmed);
+		}
+	}
+
+	return { content, items, privateBody, completions };
 }
 
 export function buildBody(
 	content: string,
 	items: ChecklistItem[],
-	options: { marker?: string; privateBody?: string } = {},
+	options: { marker?: string; privateBody?: string; completions?: string[] } = {},
 ): string {
-	const synced = buildSyncedRegion(content, items);
+	const synced = buildSyncedRegion(content, items, options.completions ?? []);
 	const marker = options.marker?.trim();
 	if (!marker) return synced;
 
@@ -373,14 +410,23 @@ export function buildBody(
 	return below.trim().length > 0 ? `${head}${marker}\n${below}` : `${head}${marker}\n`;
 }
 
-function buildSyncedRegion(content: string, items: ChecklistItem[]): string {
+function buildSyncedRegion(
+	content: string,
+	items: ChecklistItem[],
+	completions: string[],
+): string {
+	// Always written in this order, so a note settles into one shape and stops
+	// changing. A heading is omitted entirely when its section is empty.
+	const sections: string[] = [];
+
 	const trimmed = content.trim();
-	if (items.length === 0) {
-		return trimmed.length > 0 ? `${trimmed}\n` : "";
+	if (trimmed.length > 0) sections.push(trimmed);
+	if (items.length > 0) sections.push(`${SUBTASK_HEADING}\n\n${renderChecklist(items)}`);
+	if (completions.length > 0) {
+		sections.push(`${COMPLETION_HEADING}\n\n${completions.join("\n")}`);
 	}
 
-	const checklist = `${SUBTASK_HEADING}\n\n${renderChecklist(items)}\n`;
-	return trimmed.length > 0 ? `${trimmed}\n\n${checklist}` : checklist;
+	return sections.length > 0 ? `${sections.join("\n\n")}\n` : "";
 }
 
 export function taskToNote(
@@ -445,6 +491,7 @@ export function taskToNote(
 		body: buildBody(task.content, task.items, {
 			marker: options.syncedRegionMarker,
 			privateBody: context.privateBody,
+			completions: context.completions,
 		}),
 	};
 }
@@ -613,7 +660,10 @@ export function noteToTask(
 	const p = options.properties;
 	const labels = options.labels ?? DEFAULT_VALUE_LABELS;
 	const fm = note.frontmatter ?? {};
-	const { content, items, privateBody } = splitBody(note.body, options.syncedRegionMarker);
+	const { content, items, privateBody, completions } = splitBody(
+		note.body,
+		options.syncedRegionMarker,
+	);
 
 	const dueRaw = fm[p.due];
 	const startRaw = fm[p.start];
@@ -654,6 +704,7 @@ export function noteToTask(
 		projectId,
 		statusNeutral,
 		privateBody,
+		completions,
 		title: filenameTitle,
 		content,
 		status: readStatus(fm[p.status], fm[p.completed], labels),

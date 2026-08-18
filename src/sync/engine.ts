@@ -5,16 +5,27 @@ import { listSkipReason, routingForKind, type TickTickSyncSettings } from "../se
 import { NoteRepository, parentFolder, taskNotePath } from "../vault/notes";
 import { applyFieldModes } from "./fieldModes";
 import {
+	buildBody,
 	noteToTask,
 	parsedNoteToTask,
 	resolveTitle,
 	restoreItemMetadata,
 	sanitiseFilename,
+	splitBody,
 	taskToNote,
 	type NoteContext,
 	type TaskLink,
 } from "./mapper";
 import { reconcile, toSnapshot, type SyncAction, type TaskSnapshot } from "./reconcile";
+import {
+	completionLogLine,
+	findCompletedOccurrences,
+	mergeCompletionLog,
+	occurrenceMode,
+	readOccurrenceMode,
+	type CompletedOccurrence,
+	type OccurrenceMode,
+} from "./recurrence";
 import type { SyncEntry, SyncStore } from "./state";
 
 /**
@@ -86,8 +97,17 @@ interface LocalNote {
 	mtime: number;
 	/** Everything below the marker, put back verbatim on every write. */
 	privateBody: string;
+	/** The completion log this note already holds, put back on every write. */
+	completions: string[];
 	/** What the status property says now, so an equivalent wording survives. */
 	statusLabel?: string;
+	/** This task's own answer to the recurrence rule, when the property is set. */
+	occurrenceOverride?: OccurrenceMode;
+}
+
+/** A finished occurrence, plus the mode settled for it once notes were read. */
+interface RoutedOccurrence extends CompletedOccurrence {
+	mode: OccurrenceMode;
 }
 
 /** A remote record plus the extra context the engine needs to write it back. */
@@ -138,6 +158,20 @@ export class SyncEngine {
 	 */
 	private completedFetched = false;
 
+	/**
+	 * The finished occurrences of repeating tasks seen this pass, by their own id.
+	 *
+	 * Rebuilt every pass, like the link index, and for the same reason: it is
+	 * derived entirely from what the fetch returned.
+	 */
+	private occurrences = new Map<string, RoutedOccurrence>();
+
+	/** Occurrence notes created this pass, counted against the cap. */
+	private occurrenceNotes = 0;
+
+	/** So hitting the cap is reported once rather than once per occurrence. */
+	private occurrenceCapReported = false;
+
 	constructor(private readonly deps: EngineDeps) {}
 
 	get isRunning(): boolean {
@@ -164,6 +198,8 @@ export class SyncEngine {
 			);
 			this.inboxAliases.clear();
 			this.completedFetched = false;
+			this.occurrenceNotes = 0;
+			this.occurrenceCapReported = false;
 			// `projects.synced` is what we mean to read; `listed` is what actually
 			// answered. Both matter: a list can be skipped (archived, filtered out)
 			// or can fail mid-pass, and neither tells us anything about its tasks.
@@ -182,8 +218,13 @@ export class SyncEngine {
 				const kind = this.projectKinds.get(listedId);
 				if (kind && !this.projectKinds.has(realId)) this.projectKinds.set(realId, kind);
 			}
+			// Before the link index, because a finished occurrence carries the
+			// repeating task's own title — left in, every wikilink to that task reads
+			// as ambiguous and resolves to whichever record was indexed last.
+			this.indexOccurrences(remote);
 			this.links = this.buildLinkIndex(remote, projectNames);
 			const local = await this.loadLocalNotes(report, projectNames);
+			this.settleOccurrenceModes(local);
 
 			// Before anything else: give a note that has lost its id back the task
 			// it belongs to. Left until later, reconcile sees an orphaned task and
@@ -202,6 +243,7 @@ export class SyncEngine {
 				syncedProjects: listed,
 			});
 			await this.createUnlinkedNotes(local, remote, listed, report);
+			await this.logCompletedOccurrences(report);
 
 			// A dry run still moves the store about while it reasons — counting the
 			// passes a note has been missing for is what decides whether a deletion
@@ -436,7 +478,14 @@ export class SyncEngine {
 					taskId: parsed.id,
 					mtime: note.mtime,
 					privateBody: parsed.privateBody,
+					completions: parsed.completions,
 					statusLabel: readStatusLabel(note.frontmatter[settings.properties.status]),
+					// Read straight off the frontmatter rather than through the mapper:
+					// the property is the user's, never written by the plugin, and it
+					// says nothing about the task itself.
+					occurrenceOverride: readOccurrenceMode(
+						note.frontmatter[settings.recurrence.overrideProperty.trim()],
+					),
 					snapshot: toSnapshot(
 						parsedNoteToTask({ ...parsed, title, projectId }, blankTask(projectId)),
 					),
@@ -462,6 +511,174 @@ export class SyncEngine {
 		return result;
 	}
 
+	// --- Repeating tasks ------------------------------------------------------
+
+	/**
+	 * Finds the finished occurrences of repeating tasks among this pass's tasks,
+	 * and settles how each should be recorded.
+	 *
+	 * The mode set here is the one the frequency rule alone implies; a per-note
+	 * override cannot be read until the notes have been loaded, which is what
+	 * {@link settleOccurrenceModes} is for.
+	 */
+	private indexOccurrences(remote: Map<string, RemoteRecord>): void {
+		const { settings } = this.deps;
+		this.occurrences.clear();
+
+		const found = findCompletedOccurrences([...remote.values()].map((record) => record.task));
+		for (const occurrence of found) {
+			this.occurrences.set(occurrence.taskId, {
+				...occurrence,
+				mode: occurrenceMode(occurrence.intervalDays, settings.recurrence.thresholdDays),
+			});
+		}
+
+		if (this.occurrences.size === 0) return;
+
+		this.deps.log("Found finished occurrences of repeating tasks", {
+			count: this.occurrences.size,
+			thresholdDays: settings.recurrence.thresholdDays,
+			// Enough to check a routing decision against the rule that produced it.
+			examples: [...this.occurrences.values()].slice(0, 10).map((occurrence) => ({
+				title: remote.get(occurrence.taskId)?.task.title,
+				on: occurrence.completedOn,
+				everyDays: occurrence.intervalDays,
+				mode: occurrence.mode,
+			})),
+		});
+	}
+
+	/**
+	 * Applies the per-task override, which only exists once notes are loaded.
+	 *
+	 * The override lives on the repeating task's own note, because at the moment
+	 * the decision is made that is the only note there is — the occurrence has
+	 * none, and whether it gets one is exactly what is being decided.
+	 */
+	private settleOccurrenceModes(local: LocalNote[]): void {
+		const overrides = new Map<string, OccurrenceMode>();
+		for (const note of local) {
+			if (note.taskId && note.occurrenceOverride) {
+				overrides.set(note.taskId, note.occurrenceOverride);
+			}
+		}
+		if (overrides.size === 0) return;
+
+		for (const [taskId, occurrence] of this.occurrences) {
+			const override = overrides.get(occurrence.parentTaskId);
+			if (!override || override === occurrence.mode) continue;
+
+			this.occurrences.set(taskId, { ...occurrence, mode: override });
+			this.deps.log("A note overrides the recurrence rule for its task", {
+				taskId: occurrence.parentTaskId,
+				mode: override,
+			});
+		}
+	}
+
+	/**
+	 * Whether another occurrence note may be created this pass.
+	 *
+	 * A repeating task files one record per occurrence and the completed listing
+	 * reaches back ninety days, so a first sync of something that repeats often
+	 * would create a note per occurrence at once. The cap turns that into a
+	 * message. Nothing is lost by refusing: the records stay in TickTick's
+	 * listing, and later passes pick up where this one stopped.
+	 */
+	private mayCreateOccurrenceNote(report: SyncReport): boolean {
+		const cap = this.deps.settings.recurrence.maxOccurrenceNotesPerSync;
+
+		if (cap > 0 && this.occurrenceNotes >= cap) {
+			if (!this.occurrenceCapReported) {
+				this.occurrenceCapReported = true;
+				report.errors.push(
+					`Stopped after creating ${cap} notes for finished occurrences of repeating tasks. The ` +
+						"rest were left alone and later syncs will pick them up. If a task repeats often " +
+						"enough to hit this, lower the recurrence threshold so its completions are logged " +
+						"in its own note instead.",
+				);
+			}
+			return false;
+		}
+
+		this.occurrenceNotes++;
+		return true;
+	}
+
+	/**
+	 * Records a frequent repeat's completions in its own note, rather than giving
+	 * each one a note.
+	 *
+	 * Runs last, so the note is already at its final path and holds its final
+	 * content, and reads the file again rather than working from the copy loaded
+	 * at the start of the pass. Only the completion section is replaced;
+	 * everything else — frontmatter, description, subtasks, and the private
+	 * region below the marker — goes back exactly as it was found.
+	 */
+	private async logCompletedOccurrences(report: SyncReport): Promise<void> {
+		const { notes, store, settings } = this.deps;
+
+		const byTask = new Map<string, string[]>();
+		for (const occurrence of this.occurrences.values()) {
+			if (occurrence.mode !== "log" || !occurrence.completedOn) continue;
+			const lines = byTask.get(occurrence.parentTaskId) ?? [];
+			lines.push(completionLogLine(occurrence.completedOn));
+			byTask.set(occurrence.parentTaskId, lines);
+		}
+
+		for (const [taskId, lines] of byTask) {
+			const entry = store.get(taskId);
+			const file = entry ? notes.getFile(entry.notePath) : null;
+			if (!file) {
+				// The repeating task's note may only have been created by this very
+				// pass, or not yet at all. Never an error: the records stay in
+				// TickTick's completed listing for ninety days, so the next pass
+				// writes them and nothing is lost by waiting.
+				this.deps.log("No note to log a repeating task's completions in yet", { taskId });
+				continue;
+			}
+
+			try {
+				const note = await notes.read(file);
+				const parsed = splitBody(note.body, settings.syncedRegionMarker);
+				const merged = mergeCompletionLog(parsed.completions, lines);
+
+				// The merge only ever adds, so an unchanged length means every line was
+				// already there. That is what makes re-syncing free rather than
+				// duplicating the log on every pass.
+				if (merged.length === parsed.completions.length) continue;
+				const added = merged.length - parsed.completions.length;
+
+				if (this.dryRun) {
+					report.planned.push(`Log ${added} completion(s) in ${file.path}`);
+					continue;
+				}
+
+				await notes.write(file, {
+					frontmatter: note.frontmatter,
+					body: buildBody(parsed.content, parsed.items, {
+						marker: settings.syncedRegionMarker,
+						privateBody: parsed.privateBody,
+						completions: merged,
+					}),
+				});
+				report.updatedLocal++;
+
+				// This write is the plugin's own, so the tracked mtime moves with it —
+				// otherwise the next pass reads the append as an edit made in the vault
+				// and lets the note win a conflict it never had.
+				const tracked = store.get(taskId);
+				if (tracked) {
+					store.set({ ...tracked, localMtime: file.stat.mtime, lastSyncedAt: Date.now() });
+				}
+
+				this.deps.log("Logged a repeating task's completions", { note: file.path, added });
+			} catch (error) {
+				report.errors.push(`Failed to log completions in ${file.path}: ${describeError(error)}`);
+			}
+		}
+	}
+
 	// --- Task links -----------------------------------------------------------
 
 	/**
@@ -475,7 +692,13 @@ export class SyncEngine {
 		remote: Map<string, RemoteRecord>,
 		projectNames: Map<string, string>,
 	): TaskLinkIndex {
-		const tasks = [...remote.values()].map((record) => record.task);
+		// Finished occurrences are left out entirely. Each carries the repeating
+		// task's own title, so including them makes that title look ambiguous and
+		// `[[Water the plants]]` resolves to whichever record happened to be indexed
+		// last — a coin toss between the live task and a record of one day of it.
+		const tasks = [...remote.values()]
+			.map((record) => record.task)
+			.filter((task) => !this.occurrences.has(task.id));
 
 		const titleUses = new Map<string, number>();
 		for (const task of tasks) {
@@ -645,6 +868,20 @@ export class SyncEngine {
 			return;
 		}
 
+		// A completed task eventually falls out of the ninety-day completed listing,
+		// and from then on it is missing from every fetch — which looks exactly like
+		// a deletion. It is not: nothing changed in TickTick, the window moved. Any
+		// conclusion drawn here is absence read as intent, and with a note per
+		// occurrence of a repeating task there would be a fresh one to lose every
+		// week. So the note is left alone, permanently, which is the whole point.
+		if (!remoteRecord && entry && localNote && entry.base.status === "completed") {
+			this.deps.log("Completed task is older than the fetched window; leaving its note alone", {
+				taskId,
+				notePath: entry.notePath,
+			});
+			return;
+		}
+
 		// A tracked task missing from both the open and completed listings has been
 		// deleted. That conclusion is only available because completed tasks are
 		// always fetched: a direct fetch cannot settle it, since TickTick serves
@@ -665,12 +902,33 @@ export class SyncEngine {
 			return;
 		}
 
+		// A finished occurrence of a repeating task. The live task keeps its id and
+		// rolls forward, so this record is an id the sync has never seen sitting in
+		// a synced list — indistinguishable, from here, from a brand new task. Left
+		// on the ordinary path it puts a second note beside the repeating one after
+		// every completion: "Water the plants 2", "Water the plants 3", and on.
+		//
+		// Only the never-seen case is diverted. An occurrence that already has a
+		// note keeps it and keeps syncing, whatever the threshold now says — moving
+		// the threshold must never take a note away.
+		const occurrence = this.occurrences.get(taskId);
+		if (occurrence && !localNote && !entry) {
+			// Recorded as a line in the repeating task's own note instead.
+			if (occurrence.mode === "log") return;
+			if (!this.mayCreateOccurrenceNote(report)) return;
+		}
+
 		// Completed tasks are fetched for evidence. Turning one into a note is a
 		// different question, and off by default: a first sync should not backfill
 		// months of finished work nobody asked for.
+		//
+		// A recognised occurrence is exempt, because the recurrence threshold has
+		// already answered the same question for it, and answering it twice would
+		// mean the threshold silently did nothing until an unrelated setting was on.
 		if (
 			!localNote &&
 			!entry &&
+			!occurrence &&
 			remoteRecord?.task.status === "completed" &&
 			!settings.syncCompletedTasks
 		) {
@@ -1031,6 +1289,10 @@ export class SyncEngine {
 		const unclaimed = new Map<string, Task>();
 		for (const { task } of remote.values()) {
 			if (claimed.has(task.id)) continue;
+			// A repeating task's finished occurrences carry its title, so without this
+			// a note written by hand would adopt one of them instead of creating a
+			// task — binding itself to a record that can never change again.
+			if (this.occurrences.has(task.id)) continue;
 			const key = `${task.projectId}::${task.title.trim().toLowerCase()}`;
 			// First one wins; a genuinely duplicated title is ambiguous either way.
 			if (!unclaimed.has(key)) unclaimed.set(key, task);
@@ -1155,6 +1417,7 @@ export class SyncEngine {
 			this.render(task, {
 				currentStatus: note?.statusLabel,
 				privateBody: note?.privateBody,
+				completions: note?.completions,
 			}),
 		);
 
@@ -1208,6 +1471,7 @@ export class SyncEngine {
 			this.render(merged, {
 				currentStatus: note?.statusLabel,
 				privateBody: note?.privateBody,
+				completions: note?.completions,
 			}),
 		);
 	}
@@ -1242,7 +1506,10 @@ export class SyncEngine {
 		return { ...task, noteUrl: this.deps.notes.noteUrl(file) };
 	}
 
-	private render(task: Task, note?: { currentStatus?: string; privateBody?: string }) {
+	private render(
+		task: Task,
+		note?: { currentStatus?: string; privateBody?: string; completions?: string[] },
+	) {
 		const { settings } = this.deps;
 		return taskToNote(
 			task,
@@ -1445,8 +1712,15 @@ export function matchOrphansToTasks(
 	for (const task of tasks) {
 		if (claimed.has(task.id)) continue;
 		const k = key(task.projectId, task.title);
+		const held = available.get(k);
+
 		// First wins; duplicate titles are ambiguous however they are resolved.
-		if (!available.has(k)) available.set(k, task);
+		// Except that a finished record never beats a live task: a repeating task's
+		// completed occurrences all carry its title, and adopting one would leave
+		// the note tracking a record that can never change again.
+		if (!held || (held.status === "completed" && task.status !== "completed")) {
+			available.set(k, task);
+		}
 
 		const t = task.title.trim().toLowerCase();
 		byTitle.set(t, [...(byTitle.get(t) ?? []), task]);

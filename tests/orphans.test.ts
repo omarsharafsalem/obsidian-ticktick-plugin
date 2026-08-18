@@ -80,6 +80,28 @@ describe("matching orphaned notes to their tasks", () => {
 		const pairs = matchOrphansToTasks([note({ title: "Brand new thing" })], [task()]);
 		expect(pairs.size).toBe(0);
 	});
+
+	// The fourth: a repeating task's finished occurrences all carry its title, so
+	// a note that lost its id would otherwise bind itself to whichever record was
+	// listed first — a record of one day, which can never change again.
+	it("prefers the live task over a finished record of the same title", () => {
+		const pairs = matchOrphansToTasks(
+			[note()],
+			[
+				task({ id: "occurrence", status: "completed", completedTime: "2026-08-17T09:00:00.000Z" }),
+				task({ id: "live", repeatFlag: "RRULE:FREQ=DAILY" }),
+			],
+		);
+		expect(pairs.get("Tasks/R2 — break my ID property.md")).toBe("live");
+	});
+
+	it("still adopts a finished task when that is the only one there is", () => {
+		const pairs = matchOrphansToTasks(
+			[note()],
+			[task({ id: "done", status: "completed", completedTime: "2026-08-17T09:00:00.000Z" })],
+		);
+		expect(pairs.get("Tasks/R2 — break my ID property.md")).toBe("done");
+	});
 });
 
 describe("a note that never had a list", () => {
