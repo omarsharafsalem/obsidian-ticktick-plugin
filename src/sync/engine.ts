@@ -178,8 +178,14 @@ export class SyncEngine {
 			});
 			await this.createUnlinkedNotes(local, remote, projectNames, report);
 
-			this.deps.store.markSynced();
-			await this.deps.persist();
+			// A dry run still moves the store about while it reasons — counting the
+			// passes a note has been missing for is what decides whether a deletion
+			// would be proposed, so skipping it would under-report. What it must not
+			// do is keep any of that, so nothing is recorded and nothing is written.
+			if (!this.dryRun) {
+				this.deps.store.markSynced();
+				await this.deps.persist();
+			}
 		} catch (error) {
 			report.errors.push(describeError(error));
 		} finally {
@@ -638,8 +644,7 @@ export class SyncEngine {
 		const { store, notes, client, settings } = this.deps;
 
 		if (this.dryRun) {
-			const description = describeAction(action, localNote?.file.path, remoteRecord?.task.title);
-			if (description) report.planned.push(description);
+			report.planned.push(...this.planFor(action, projectNames, localNote, remoteRecord));
 			return;
 		}
 
@@ -792,6 +797,59 @@ export class SyncEngine {
 		}
 	}
 
+	/**
+	 * What a dry run reports for one action.
+	 *
+	 * A move is not an action of its own — it happens inside an update, to the
+	 * note or to the task or to both — so it has to be worked out here rather
+	 * than read off the action's kind. It is also the change most likely to be a
+	 * surprise, since nothing in the note says which folder it will end up in, so
+	 * a preview that left it out would be reassuring about the wrong thing.
+	 */
+	private planFor(
+		action: SyncAction,
+		projectNames: Map<string, string>,
+		localNote?: LocalNote,
+		remoteRecord?: RemoteRecord,
+	): string[] {
+		const lines: string[] = [];
+		const summary = describeAction(action, localNote?.file.path, remoteRecord?.task.title);
+		if (summary) lines.push(summary);
+
+		if (action.kind === "orphanLocal" && localNote) {
+			lines.push(
+				`Move note ${localNote.file.path} → ${this.deps.settings.deletedTaskFolder}/${localNote.file.name}`,
+			);
+			return lines;
+		}
+
+		if (
+			action.kind !== "updateLocal" &&
+			action.kind !== "updateRemote" &&
+			action.kind !== "updateBoth"
+		) {
+			return lines;
+		}
+		if (!localNote || !remoteRecord) return lines;
+
+		const from = remoteRecord.task.projectId;
+		const to = action.snapshot.projectId;
+		if (action.kind !== "updateLocal" && to && from && to !== from) {
+			lines.push(
+				`Move task "${remoteRecord.task.title}" from list ${projectNames.get(from) ?? from} ` +
+					`to ${projectNames.get(to) ?? to}`,
+			);
+		}
+
+		const merged: Task = { ...remoteRecord.task, ...action.snapshot, id: remoteRecord.task.id };
+		const desired = this.desiredNotePath(merged, localNote.file, projectNames);
+		if (desired !== localNote.file.path) {
+			lines.push(`Move note ${localNote.file.path} → ${desired}`);
+		}
+
+		return lines;
+	}
+
 	// --- Writing ------------------------------------------------------------
 
 	/**
@@ -911,6 +969,12 @@ export class SyncEngine {
 			const wantedList = note.snapshot.projectId || inbox || "";
 			const twin = unclaimed.get(`${wantedList}::${note.snapshot.title.trim().toLowerCase()}`);
 			if (twin) {
+				if (this.dryRun) {
+					report.planned.push(`Re-link ${note.file.path} to its existing task "${twin.title}"`);
+					unclaimed.delete(`${wantedList}::${note.snapshot.title.trim().toLowerCase()}`);
+					continue;
+				}
+
 				// Link the two rather than creating a second task. The next pass
 				// reconciles them normally, from the note's own values.
 				await this.stampNote(note.file, twin, note.snapshot, note);
@@ -981,8 +1045,7 @@ export class SyncEngine {
 		projectNames: Map<string, string>,
 		note?: LocalNote,
 	): Promise<TFile> {
-		const { notes, settings } = this.deps;
-		const projectName = projectNames.get(task.projectId);
+		const { notes } = this.deps;
 		await notes.write(
 			file,
 			this.render(task, {
@@ -991,27 +1054,41 @@ export class SyncEngine {
 			}),
 		);
 
-		// Once notes are found by property rather than by folder, where a note
-		// lives is the user's decision — dragging it back to a computed path
-		// would undo a deliberate move. Only the filename follows the title.
-		const desired = settings.discoverAnywhere
-			? taskNotePath(task.title, {
-					taskFolder: parentFolder(file.path),
-					folderPerProject: false,
-				})
-			: taskNotePath(task.title, {
-					taskFolder: this.folderFor(task),
-					projectName,
-					folderPerProject: settings.folderPerProject && !settings.listFolders[task.projectId],
-				});
-
 		// Covers a renamed task, and a task moved between lists when folders are
 		// managed by the plugin.
+		const desired = this.desiredNotePath(task, file, projectNames);
 		if (file.path !== desired) {
 			await notes.rename(file, desired);
 		}
 
 		return file;
+	}
+
+	/**
+	 * Where a task's note should sit once it has been written.
+	 *
+	 * Shared with the dry run rather than inlined, because a preview that worked
+	 * the path out its own way would eventually disagree with the sync it claims
+	 * to be describing.
+	 */
+	private desiredNotePath(task: Task, file: TFile, projectNames: Map<string, string>): string {
+		const { settings } = this.deps;
+
+		// Once notes are found by property rather than by folder, where a note
+		// lives is the user's decision — dragging it back to a computed path
+		// would undo a deliberate move. Only the filename follows the title.
+		if (settings.discoverAnywhere) {
+			return taskNotePath(task.title, {
+				taskFolder: parentFolder(file.path),
+				folderPerProject: false,
+			});
+		}
+
+		return taskNotePath(task.title, {
+			taskFolder: this.folderFor(task),
+			projectName: projectNames.get(task.projectId),
+			folderPerProject: settings.folderPerProject && !settings.listFolders[task.projectId],
+		});
 	}
 
 	/** Records the freshly assigned remote id into a locally authored note. */
