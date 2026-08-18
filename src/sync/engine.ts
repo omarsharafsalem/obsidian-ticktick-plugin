@@ -1655,6 +1655,7 @@ export class SyncEngine {
 					value: this.routingFor(task.projectId).noteType,
 				},
 				syncedRegionMarker: settings.syncedRegionMarker,
+				aliasTitles: settings.aliasUnrepresentableTitles,
 				useTaskTimeZone: settings.showTimesIn === "task",
 			},
 			{

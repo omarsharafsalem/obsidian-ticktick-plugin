@@ -138,9 +138,17 @@ describe("a note whose filename is not its title", () => {
 	const P3 = DEFAULT_PROPERTIES;
 	const t = (title: string) => ({ ...blankTask("p1"), id: "t1", title }) as Task;
 
-	it("records the real title and offers it as an alias", () => {
+	const withAlias = { ...DEFAULT_MAPPER_OPTIONS, aliasTitles: true };
+
+	it("records the real title, and leaves aliases alone by default", () => {
 		const fm = taskToNote(t("Read: chapter 3/4")).frontmatter;
 		expect(fm[P3.title]).toBe("Read: chapter 3/4");
+		// `aliases` belongs to the vault, not the plugin: untouched unless asked.
+		expect(fm).not.toHaveProperty("aliases");
+	});
+
+	it("offers it as an alias once the option is on", () => {
+		const fm = taskToNote(t("Read: chapter 3/4"), withAlias).frontmatter;
 		expect(fm["aliases"]).toEqual(["Read: chapter 3/4"]);
 	});
 
@@ -151,7 +159,6 @@ describe("a note whose filename is not its title", () => {
 			filenameTitle: "Water the plants 2",
 		}).frontmatter;
 		expect(fm[P3.title]).toBe("Water the plants");
-		expect(fm["aliases"]).toEqual(["Water the plants"]);
 	});
 
 	it("writes neither when the filename says it plainly", () => {
@@ -162,24 +169,25 @@ describe("a note whose filename is not its title", () => {
 
 	// Aliases are the user's list. Adding one must never drop one they wrote.
 	it("keeps aliases the user already had", () => {
-		const fm = taskToNote(t("Read: chapter 3/4"), undefined, {
+		const fm = taskToNote(t("Read: chapter 3/4"), withAlias, {
 			currentAliases: ["my own nickname"],
 		}).frontmatter;
 		expect(fm["aliases"]).toEqual(["my own nickname", "Read: chapter 3/4"]);
 	});
 
 	it("does not add the same alias twice", () => {
-		const fm = taskToNote(t("Read: chapter 3/4"), undefined, {
+		const fm = taskToNote(t("Read: chapter 3/4"), withAlias, {
 			currentAliases: ["Read: chapter 3/4"],
 		}).frontmatter;
 		expect(fm["aliases"]).toEqual(["Read: chapter 3/4"]);
 	});
 
 	it("preserves a user's aliases on a note that needs no override", () => {
-		const fm = taskToNote(t("Buy milk"), undefined, {
+		const fm = taskToNote(t("Buy milk"), withAlias, {
 			filenameTitle: "Buy milk",
 			currentAliases: ["groceries"],
 		}).frontmatter;
-		expect(fm["aliases"]).toEqual(["groceries"]);
+		// Not rewritten at all — which is what leaves the user's list intact.
+		expect(fm).not.toHaveProperty("aliases");
 	});
 });

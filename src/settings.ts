@@ -339,6 +339,20 @@ export interface TickTickSyncSettings {
 	linkBackToNote: boolean;
 
 	/**
+	 * Also record an unrepresentable title in the note's `aliases`.
+	 *
+	 * Only ever on a note whose filename could not carry its title — illegal
+	 * characters, or a collision suffix. The title property records it either
+	 * way; the alias is what makes the note reachable *by* that title, since the
+	 * quick switcher and `[[links]]` both go through the filename otherwise.
+	 *
+	 * Off by default. `aliases` is a vault-wide Obsidian concept rather than one
+	 * of this plugin's own properties, and writing into someone's alias list
+	 * should be asked for rather than assumed.
+	 */
+	aliasUnrepresentableTitles: boolean;
+
+	/**
 	 * Where each list's notes are created, keyed by project id.
 	 *
 	 * A list with no entry falls back to {@link taskFolder}, so this can be set
@@ -483,6 +497,7 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	deletedTaskFolder: "🗄️ Archive",
 	syncedRegionMarker: "<!-- ticktick:end -->",
 	linkBackToNote: true,
+	aliasUnrepresentableTitles: false,
 	dateProperties: "datetime",
 	showTimesIn: "local",
 	maxNewTasksPerSync: 20,

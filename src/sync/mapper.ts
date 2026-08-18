@@ -153,6 +153,13 @@ export interface MapperOptions {
 	 * impossible to edit deliberately. Supplied by the engine, which knows the
 	 * account's lists; kept as a plain function so this module stays pure.
 	 */
+	/**
+	 * Whether an unrepresentable title is also written to the note's aliases.
+	 *
+	 * Off unless asked for: `aliases` is Obsidian's, not this plugin's, and a
+	 * vault owner's alias list is not somewhere to write uninvited.
+	 */
+	aliasTitles?: boolean;
 	resolveProject?: (nameOrId: string) => string | undefined;
 	/**
 	 * Turns whatever is written in the sub-project property back into a section id.
@@ -504,16 +511,20 @@ export function taskToNote(
 	if (filenameCannotHold) {
 		frontmatter[p.title] = task.title;
 
-		// And as an alias, so the note is still findable and linkable by the name
-		// it actually has. Obsidian resolves [[a real title]] and the quick
-		// switcher through aliases, which is the only way to reach a note whose
-		// filename is not its name. Added, never removed: the list is the user's,
-		// and a stale entry costs nothing next to deleting one they wrote.
-		const existing = context.currentAliases ?? [];
-		if (!existing.includes(task.title)) frontmatter["aliases"] = [...existing, task.title];
-		else frontmatter["aliases"] = existing;
-	} else if (context.currentAliases?.length) {
-		frontmatter["aliases"] = context.currentAliases;
+		// And, if asked for, as an alias — the only way to reach a note whose
+		// filename is not its name, since the quick switcher and [[links]] both go
+		// through the filename. Added, never removed: the list is the user's, and a
+		// stale entry costs nothing next to deleting one they wrote.
+		//
+		// When the option is off nothing is written here at all, rather than the
+		// existing list being written back unchanged. `aliases` is not one of the
+		// plugin's properties, so leaving it out is what preserves it.
+		if (options.aliasTitles) {
+			const existing = context.currentAliases ?? [];
+			frontmatter["aliases"] = existing.includes(task.title)
+				? existing
+				: [...existing, task.title];
+		}
 	}
 
 	const marker = options.marker;

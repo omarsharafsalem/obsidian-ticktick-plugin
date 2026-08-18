@@ -472,6 +472,22 @@ export class TickTickSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(root)
+			.setName("Add an alias for titles a filename cannot hold")
+			.setDesc(
+				"Some titles cannot be a filename — a colon or a slash, or a second task with the " +
+					"same name. The real title is always written to the title property; this also adds " +
+					"it to the note's aliases, so it can be found in the quick switcher and linked as " +
+					"[[the real title]]. Aliases never create links on their own. Existing aliases are " +
+					"kept — the plugin only adds, never removes.",
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(settings.aliasUnrepresentableTitles).onChange(async (value) => {
+					settings.aliasUnrepresentableTitles = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(root)
 			.setName("Deleted tasks go to")
 			.setDesc(
 				"When a task is deleted in TickTick its note moves here rather than being deleted — the " +
