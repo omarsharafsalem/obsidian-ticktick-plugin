@@ -10,7 +10,21 @@ import {
 	type OAuthConfig,
 } from "./auth/oauth";
 import { DEFAULT_SETTINGS, mergeSettings, type TickTickSyncSettings } from "./settings";
+import {
+	describeSettingsChanges,
+	renderSettingsDocument,
+	SETTINGS_NOTE_PATH,
+	settingsFromDocument,
+} from "./settingsDocument";
 import { SyncEngine, type SyncReport } from "./sync/engine";
+import {
+	PREVIEW_NOTE_PATH,
+	previewStore,
+	readOnlyClient,
+	ReadOnlyNoteRepository,
+	refusePersist,
+	renderPreviewReport,
+} from "./sync/preview";
 import { migrateState, SyncStore, type SyncState } from "./sync/state";
 import { NoteRepository, registerPropertyTypes } from "./vault/notes";
 import { applyHiddenProperties, removeHiddenProperties } from "./vault/hideProperties";
@@ -63,6 +77,50 @@ export default class TickTickSyncPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: "preview-sync",
+			name: "Preview sync",
+			callback: () => void this.previewSync(),
+		});
+
+		this.addCommand({
+			id: "start-syncing",
+			name: "Start syncing",
+			checkCallback: (checking) => {
+				if (this.settings.syncingStarted) return false;
+				if (!checking) void this.startSyncing();
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: "pause-syncing",
+			name: "Pause syncing",
+			checkCallback: (checking) => {
+				if (!this.settings.syncingStarted) return false;
+				if (!checking) void this.pauseSyncing();
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: "export-settings",
+			name: "Export settings to a note",
+			callback: () => void this.exportSettingsNote(),
+		});
+
+		this.addCommand({
+			id: "import-settings",
+			name: "Import settings from the note",
+			callback: () => void this.importSettingsNote(),
+		});
+
+		this.addCommand({
+			id: "reload-settings",
+			name: "Reload settings from disk",
+			callback: () => void this.reloadSettings(),
+		});
+
 		// A vault change means the next scheduled sync has something to do; this
 		// only nudges the timer, it never syncs on every keystroke.
 		const nudge = debounce(() => this.scheduleSoon(), 5000, true);
@@ -74,7 +132,7 @@ export default class TickTickSyncPlugin extends Plugin {
 
 		this.app.workspace.onLayoutReady(() => {
 			this.restartTimer();
-			if (this.settings.syncOnStartup && this.isConnected()) {
+			if (this.settings.syncOnStartup && this.settings.syncingStarted && this.isConnected()) {
 				void this.runSync({ silent: true });
 			}
 		});
@@ -89,7 +147,10 @@ export default class TickTickSyncPlugin extends Plugin {
 
 	private async loadPersisted(): Promise<void> {
 		const raw = ((await this.loadData()) ?? {}) as Partial<PersistedData>;
-		this.settings = mergeSettings(raw.settings);
+		// The stored sync state goes in as well: it is the only evidence of
+		// whether this vault has been syncing already, which is what decides
+		// whether an upgrade starts started. See `resolveSyncingStarted`.
+		this.settings = mergeSettings(raw.settings, raw.syncState);
 		this.store = new SyncStore(migrateState(raw.syncState));
 	}
 
@@ -100,11 +161,121 @@ export default class TickTickSyncPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.persist();
+		this.applySettings();
+	}
+
+	/**
+	 * Re-reads data.json, so a configuration edited outside Obsidian takes
+	 * effect without a restart.
+	 *
+	 * The file is the plugin's real interface for anything the settings tab
+	 * cannot express, and until now editing it meant restarting the app — which
+	 * is enough friction that people edit it live instead and lose the changes on
+	 * the next save.
+	 */
+	async reloadSettings(): Promise<void> {
+		await this.loadPersisted();
+		this.applySettings();
+		new Notice("TickTick settings reloaded from disk.");
+	}
+
+	/** Everything derived from settings, redone whenever they change. */
+	private applySettings(): void {
 		if (this.settings.registerPropertyTypes) {
 			registerPropertyTypes(this.app, this.settings.properties, this.settings.dateProperties);
 		}
 		applyHiddenProperties(this.hiddenPropertyNames());
 		this.restartTimer();
+	}
+
+	// --- Starting and pausing -----------------------------------------------
+
+	/**
+	 * Lets scheduled, startup and manual syncs run.
+	 *
+	 * Separate from connecting because a token proves only that the account can
+	 * be reached, and the settings that decide what a sync does to the vault are
+	 * all still empty at that point.
+	 */
+	async startSyncing(): Promise<void> {
+		this.settings.syncingStarted = true;
+		await this.saveSettings();
+		new Notice("TickTick syncing started.");
+	}
+
+	async pauseSyncing(): Promise<void> {
+		this.settings.syncingStarted = false;
+		await this.saveSettings();
+		new Notice(
+			"TickTick syncing paused. Nothing will be read or written until you start it again.",
+		);
+	}
+
+	// --- Settings as a note --------------------------------------------------
+
+	/** Writes the current configuration out where it can be read and checked. */
+	async exportSettingsNote(): Promise<void> {
+		try {
+			const file = await this.writePluginNote(
+				SETTINGS_NOTE_PATH,
+				renderSettingsDocument(this.settings),
+			);
+			new Notice(`Settings written to ${SETTINGS_NOTE_PATH}. Your credentials are not in it.`);
+			await this.openNote(file);
+		} catch (error) {
+			new Notice(`Could not export settings: ${describeError(error)}`);
+		}
+	}
+
+	/**
+	 * Applies the configuration in the exported note.
+	 *
+	 * Credentials are taken from what is already installed and the syncing switch
+	 * is left alone, so a note that has been passed around cannot hand out
+	 * account access or start a sync on its own.
+	 */
+	async importSettingsNote(): Promise<void> {
+		const file = this.app.vault.getAbstractFileByPath(SETTINGS_NOTE_PATH);
+		if (!(file instanceof TFile)) {
+			new Notice(`There is no ${SETTINGS_NOTE_PATH} in this vault. Export your settings first.`);
+			return;
+		}
+
+		try {
+			const next = settingsFromDocument(await this.app.vault.read(file), this.settings);
+			const changed = describeSettingsChanges(this.settings, next);
+			this.settings = next;
+			await this.saveSettings();
+
+			new Notice(
+				changed.length === 0
+					? "Settings imported — nothing differed from what was already set."
+					: `Settings imported. Changed: ${changed.join(", ")}.`,
+			);
+		} catch (error) {
+			new Notice(`Could not import settings: ${describeError(error)}`, 10_000);
+		}
+	}
+
+	/**
+	 * Writes one of the plugin's own notes, creating or replacing it.
+	 *
+	 * Not through `NoteRepository`: that one merges managed task properties into
+	 * whatever it writes, and these are documents about the plugin rather than
+	 * tasks.
+	 */
+	private async writePluginNote(path: string, contents: string): Promise<TFile> {
+		const existing = this.app.vault.getAbstractFileByPath(path);
+		if (existing instanceof TFile) {
+			await this.app.vault.modify(existing, contents);
+			return existing;
+		}
+
+		return this.app.vault.create(path, contents);
+	}
+
+	private async openNote(file: TFile): Promise<void> {
+		await this.app.workspace.getLeaf(false).openFile(file);
 	}
 
 	// --- Client wiring ------------------------------------------------------
@@ -193,17 +364,40 @@ export default class TickTickSyncPlugin extends Plugin {
 			return null;
 		}
 
+		const preview = options.dryRun === true;
+
+		// The gate. A preview is exempt because it cannot write anything, and
+		// looking at what a sync would do is exactly how you decide it is safe to
+		// let one happen.
+		if (!preview && !this.settings.syncingStarted) {
+			if (!options.silent) {
+				new Notice(
+					"TickTick syncing has not been started yet. Finish setting up, run Preview sync to " +
+						"check what would happen, then press Start syncing in the plugin settings.",
+					10_000,
+				);
+			}
+			return null;
+		}
+
 		const engine = new SyncEngine({
-			client: this.createClient(),
-			notes: new NoteRepository(this.app, this.settings.properties),
-			store: this.store,
+			// A preview is not asked to behave; it is given nothing that can write.
+			// See `sync/preview.ts` — the guarantee is that a forgotten dry-run
+			// check becomes a reported problem rather than an edit to the vault.
+			client: preview ? readOnlyClient(this.createClient()) : this.createClient(),
+			notes: preview
+				? new ReadOnlyNoteRepository(this.app, this.settings.properties)
+				: new NoteRepository(this.app, this.settings.properties),
+			store: preview ? previewStore(this.store.raw) : this.store,
 			settings: this.settings,
-			persist: () => this.persist(),
+			persist: preview ? refusePersist : () => this.persist(),
 			log: (message, ...rest) => this.log(message, ...rest),
-			confirmDeletion: (request) =>
-				new Promise<boolean>((resolve) => {
-					new ConfirmDeletionModal(this.app, request, resolve).open();
-				}),
+			confirmDeletion: preview
+				? undefined
+				: (request) =>
+						new Promise<boolean>((resolve) => {
+							new ConfirmDeletionModal(this.app, request, resolve).open();
+						}),
 		});
 
 		if (engine.isRunning) return null;
@@ -219,16 +413,49 @@ export default class TickTickSyncPlugin extends Plugin {
 			return report;
 		} catch (error) {
 			this.setStatus("error");
-			const message = error instanceof Error ? error.message : String(error);
-			new Notice(`TickTick sync failed: ${message}`);
+			new Notice(`TickTick sync failed: ${describeError(error)}`);
 			return null;
 		}
+	}
+
+	/**
+	 * Reports what the next sync would do, and writes it where it can be read.
+	 *
+	 * Deliberately available before syncing has been started: this is the check
+	 * that makes starting a reasonable thing to do at all. The report is a note
+	 * rather than a modal because a first run against a real vault plans hundreds
+	 * of changes, and a list you can scroll and search beside the settings you
+	 * are correcting is worth more than one that vanishes on a stray click.
+	 */
+	async previewSync(): Promise<SyncReport | null> {
+		const report = await this.runSync({ silent: true, dryRun: true });
+		if (!report) return null;
+
+		try {
+			const file = await this.writePluginNote(PREVIEW_NOTE_PATH, renderPreviewReport(report));
+			await this.openNote(file);
+		} catch (error) {
+			new Notice(`Could not write the preview report: ${describeError(error)}`);
+		}
+
+		new Notice(
+			`TickTick: ${report.planned.length} change(s) planned. Nothing has been written.` +
+				(report.errors.length > 0 ? ` ${report.errors.length} problem(s) — see the report.` : ""),
+		);
+
+		return report;
 	}
 
 	// --- Timer --------------------------------------------------------------
 
 	private restartTimer(): void {
 		this.clearTimer();
+
+		// Nothing is scheduled until syncing has been started. `runSync` refuses
+		// as well, but a timer that fires every five minutes into a refusal is
+		// only a bug waiting for someone to "fix" it by removing the check.
+		if (!this.settings.syncingStarted) return;
+
 		const minutes = this.settings.syncIntervalMinutes;
 		if (minutes <= 0) return;
 
@@ -238,6 +465,7 @@ export default class TickTickSyncPlugin extends Plugin {
 
 	/** Brings the next automatic sync forward after a local edit. */
 	private scheduleSoon(): void {
+		if (!this.settings.syncingStarted) return;
 		if (this.settings.syncIntervalMinutes <= 0) return;
 		window.setTimeout(() => void this.runSync({ silent: true }), 10_000);
 	}
@@ -267,6 +495,10 @@ export default class TickTickSyncPlugin extends Plugin {
 		if (!this.settings.debugLogging) return;
 		console.log(`[ticktick-sync] ${message}`, ...rest);
 	}
+}
+
+function describeError(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 function summarise(report: SyncReport): string {

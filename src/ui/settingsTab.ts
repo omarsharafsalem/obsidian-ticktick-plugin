@@ -1,5 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type TickTickSyncPlugin from "../main";
+import { SETTINGS_NOTE_PATH } from "../settingsDocument";
 import {
 	SYNCED_FIELDS,
 	type Priority,
@@ -191,9 +192,10 @@ export class TickTickSettingTab extends PluginSettingTab {
 			new Setting(root)
 				.setName("Connected")
 				.setDesc(
-					"Using your personal API token — there is nothing else to set up. Choose your lists " +
-						"below, then press Sync now. Clear the token above to use an app registration instead.",
+					"Using your personal API token — there is nothing else to authorise. Clear the token " +
+						"above to use an app registration instead.",
 				);
+			this.renderSyncingGate(root);
 			return;
 		}
 
@@ -263,6 +265,57 @@ export class TickTickSettingTab extends PluginSettingTab {
 						this.display();
 					}),
 			);
+
+		this.renderSyncingGate(root);
+	}
+
+	/**
+	 * The switch between being connected and actually syncing.
+	 *
+	 * Pasting a token used to make the plugin live immediately, while everything
+	 * that decides what a sync writes — the property names, the value labels, the
+	 * task marker, which lists, which folders — was still empty. What that
+	 * produces is a vault full of notes to undo by hand, so starting is now its
+	 * own decision, taken once the rest is filled in and a preview has been read.
+	 */
+	private renderSyncingGate(root: HTMLElement): void {
+		const { settings } = this.plugin;
+		root.createEl("h2", { text: "Syncing" });
+
+		new Setting(root)
+			.setName(settings.syncingStarted ? "Syncing is on" : "Syncing has not been started")
+			.setDesc(
+				settings.syncingStarted
+					? "Scheduled, startup and manual syncs all run. Pausing stops every one of them and " +
+							"changes nothing in the vault or in TickTick."
+					: "No task note is read or written until you start. Work through the tabs above first, " +
+							"then run Preview sync — it writes a report of what the first sync would do and " +
+							"changes nothing.",
+			)
+			.addButton((button) => {
+				if (settings.syncingStarted) {
+					button.setButtonText("Pause syncing").onClick(async () => {
+						await this.plugin.pauseSyncing();
+						this.display();
+					});
+					return;
+				}
+
+				button
+					.setButtonText("Start syncing")
+					.setCta()
+					.onClick(async () => {
+						if (!this.plugin.isConnected()) {
+							new Notice("Connect to TickTick first.");
+							return;
+						}
+						await this.plugin.startSyncing();
+						this.display();
+					});
+			})
+			.addButton((button) =>
+				button.setButtonText("Preview sync").onClick(() => void this.plugin.previewSync()),
+			);
 	}
 
 	private async connectOAuth(): Promise<void> {
@@ -320,6 +373,15 @@ export class TickTickSettingTab extends PluginSettingTab {
 	private renderSync(root: HTMLElement): void {
 		const { settings } = this.plugin;
 		root.createEl("h2", { text: "Sync" });
+
+		if (!settings.syncingStarted) {
+			root.createEl("p", {
+				cls: "mod-warning",
+				text:
+					"Syncing has not been started, so none of this is in effect yet. Fill it in, preview " +
+					"it, then press Start syncing on the Connection tab.",
+			});
+		}
 
 		new Setting(root)
 			.setName("Mark a note as a task with")
@@ -530,7 +592,7 @@ export class TickTickSettingTab extends PluginSettingTab {
 			)
 			.addButton((button) =>
 				button.setButtonText("Preview changes").onClick(async () => {
-					const report = await this.plugin.runSync({ silent: true, dryRun: true });
+					const report = await this.plugin.previewSync();
 					if (report) new PlannedChangesModal(this.app, report).open();
 				}),
 			);
@@ -1074,6 +1136,42 @@ export class TickTickSettingTab extends PluginSettingTab {
 				toggle.setValue(settings.debugLogging).onChange(async (value) => {
 					settings.debugLogging = value;
 					await this.plugin.saveSettings();
+				}),
+			);
+
+		/*
+		 * A configuration decides what gets written across the whole vault, and
+		 * eight tabs of controls is not a form anyone can check at a glance. As a
+		 * note it can be read in one screen, kept, diffed, handed over — and, the
+		 * point of it, reviewed before it is applied rather than after.
+		 */
+		new Setting(root)
+			.setName("Settings as a note")
+			.setDesc(
+				`Writes your configuration to "${SETTINGS_NOTE_PATH}" so it can be read and checked, and ` +
+					"reads it back again. Your API token and any OAuth secrets are left out, so the note is " +
+					"safe to paste anywhere — and an import can never set them, or start syncing.",
+			)
+			.addButton((button) =>
+				button.setButtonText("Export").onClick(() => void this.plugin.exportSettingsNote()),
+			)
+			.addButton((button) =>
+				button.setButtonText("Import").onClick(async () => {
+					await this.plugin.importSettingsNote();
+					this.display();
+				}),
+			);
+
+		new Setting(root)
+			.setName("Reload settings from disk")
+			.setDesc(
+				"Re-reads data.json, so settings edited outside Obsidian take effect without restarting " +
+					"it. Anything changed here and not yet saved is discarded.",
+			)
+			.addButton((button) =>
+				button.setButtonText("Reload").onClick(async () => {
+					await this.plugin.reloadSettings();
+					this.display();
 				}),
 			);
 

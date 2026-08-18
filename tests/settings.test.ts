@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { mergeSettings } from "../src/settings";
+import { hasSyncedBefore, mergeSettings } from "../src/settings";
+import { SYNC_STATE_VERSION, type SyncEntry, type SyncState } from "../src/sync/state";
 
 /**
  * Settings written by an older version have to keep working. The status labels
@@ -62,5 +63,83 @@ describe("migrating stored settings", () => {
 
 		expect(merged.listKinds.NOTE).toEqual({ folder: "🧠 Notes", noteType: "💭 thought" });
 		expect(merged.listKinds.TASK).toEqual({ folder: "", noteType: "" });
+	});
+});
+
+/**
+ * Syncing now has to be started deliberately, which is right for a fresh
+ * install and wrong for every install that already exists: reading the missing
+ * flag as "not started" would quietly stop a sync that has been running for
+ * months, and the user would have no reason to look for a button. This is the
+ * upgrade path, and it is the kind of thing this codebase has got wrong before.
+ */
+describe("starting syncing on an existing install", () => {
+	function entry(overrides: Partial<SyncEntry> = {}): SyncEntry {
+		return {
+			taskId: "task-1",
+			projectId: "list-a",
+			notePath: "Tasks/Buy milk.md",
+			base: {} as SyncEntry["base"],
+			localMtime: 0,
+			lastSyncedAt: 0,
+			...overrides,
+		};
+	}
+
+	function state(overrides: Partial<SyncState> = {}): SyncState {
+		return { version: SYNC_STATE_VERSION, entries: {}, tombstones: {}, ...overrides };
+	}
+
+	it("does not start syncing on a fresh install", () => {
+		expect(mergeSettings(undefined, undefined).syncingStarted).toBe(false);
+	});
+
+	it("does not start syncing for settings saved before a first sync", () => {
+		// Connected, configured, but nothing has ever been synced — the exact case
+		// the gate exists for.
+		const merged = mergeSettings({ auth: { personalToken: "abc" } }, state());
+		expect(merged.syncingStarted).toBe(false);
+	});
+
+	it("keeps syncing for an install with tracked notes", () => {
+		const merged = mergeSettings(
+			{ taskFolder: "Tasks" },
+			state({ entries: { "task-1": entry() } }),
+		);
+		expect(merged.syncingStarted).toBe(true);
+	});
+
+	it("keeps syncing for an install that has recorded a full sync", () => {
+		const merged = mergeSettings({ taskFolder: "Tasks" }, state({ lastFullSync: 1_700_000_000 }));
+		expect(merged.syncingStarted).toBe(true);
+	});
+
+	it("keeps syncing for an install whose only trace is a tombstone", () => {
+		const merged = mergeSettings({}, state({ tombstones: { "task-9": 1_700_000_000 } }));
+		expect(merged.syncingStarted).toBe(true);
+	});
+
+	// State written by an older version is discarded on load. Judging the upgrade
+	// from the migrated state would tell exactly those installs they were new.
+	it("reads the evidence from state an older version wrote", () => {
+		const merged = mergeSettings({}, { version: 1, entries: { "task-1": entry() } });
+		expect(merged.syncingStarted).toBe(true);
+	});
+
+	it("respects the stored answer once there is one", () => {
+		const started = mergeSettings({ syncingStarted: true }, state());
+		expect(started.syncingStarted).toBe(true);
+
+		// Pausing has to survive a restart, so evidence of past syncing must not
+		// override an explicit "no".
+		const paused = mergeSettings({ syncingStarted: false }, state({ lastFullSync: 1 }));
+		expect(paused.syncingStarted).toBe(false);
+	});
+
+	it("reads nothing into a missing or unusable sync state", () => {
+		expect(hasSyncedBefore(undefined)).toBe(false);
+		expect(hasSyncedBefore(null)).toBe(false);
+		expect(hasSyncedBefore("nonsense")).toBe(false);
+		expect(hasSyncedBefore({})).toBe(false);
 	});
 });
