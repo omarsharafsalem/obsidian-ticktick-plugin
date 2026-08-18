@@ -1520,6 +1520,27 @@ export class SyncEngine {
 			});
 		}
 
+		// The same reasoning applies to a note that already exists, whether or not
+		// notes are discovered by property: placement is a decision made when the
+		// note is created, and a later edit is no reason to revisit it. Renaming a
+		// task used to haul its note out of the folder it had been filed in and
+		// into the computed one, which is how a note deliberately kept beside its
+		// project's other material would quietly leave.
+		//
+		// Unless the list itself changed. Then the note really does belong
+		// somewhere else, and R6-style moves and per-list folders keep working.
+		// Archiving a completed task still overrides both.
+		const tracked = this.deps.store.getByPath(file.path);
+		const listUnchanged = tracked !== undefined && tracked.projectId === task.projectId;
+		const archiving =
+			task.status === "completed" && settings.completedHandling === "archive";
+		if (listUnchanged && !archiving) {
+			return taskNotePath(task.title, {
+				taskFolder: parentFolder(file.path),
+				folderPerProject: false,
+			});
+		}
+
 		return taskNotePath(task.title, {
 			taskFolder: this.folderFor(task),
 			projectName: projectNames.get(task.projectId),
