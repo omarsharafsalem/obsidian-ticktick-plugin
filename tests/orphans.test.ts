@@ -81,3 +81,58 @@ describe("matching orphaned notes to their tasks", () => {
 		expect(pairs.size).toBe(0);
 	});
 });
+
+describe("a note that never had a list", () => {
+	// The duplicate-note bug seen in real testing: a note written by hand has no
+	// `project` property, so list-plus-title never matched and it was never
+	// adopted — reconcile wrote a second note for the task while the note itself
+	// still looked new.
+	const task = (over: Partial<Task> = {}): Task =>
+		({ id: "t1", projectId: "p1", title: "Read chapter 3", ...over }) as Task;
+
+	it("is adopted when exactly one task answers to its title", () => {
+		const pairs = matchOrphansToTasks(
+			[{ path: "Read chapter 3.md", taskId: "", title: "Read chapter 3", projectId: "" }],
+			[task()],
+		);
+		expect(pairs.get("Read chapter 3.md")).toBe("t1");
+	});
+
+	it("is left alone when two tasks answer to it, rather than guessed at", () => {
+		const pairs = matchOrphansToTasks(
+			[{ path: "Read chapter 3.md", taskId: "", title: "Read chapter 3", projectId: "" }],
+			[task(), task({ id: "t2", projectId: "p2" })],
+		);
+		expect(pairs.size).toBe(0);
+	});
+
+	it("does not claim a task another note already holds", () => {
+		const pairs = matchOrphansToTasks(
+			[
+				{ path: "linked.md", taskId: "t1", title: "Read chapter 3", projectId: "p1" },
+				{ path: "loose.md", taskId: "", title: "Read chapter 3", projectId: "" },
+			],
+			[task()],
+		);
+		expect(pairs.size).toBe(0);
+	});
+
+	it("gives two list-less notes of the same title only one task between them", () => {
+		const pairs = matchOrphansToTasks(
+			[
+				{ path: "a.md", taskId: "", title: "Read chapter 3", projectId: "" },
+				{ path: "b.md", taskId: "", title: "Read chapter 3", projectId: "" },
+			],
+			[task()],
+		);
+		expect(pairs.size).toBe(1);
+	});
+
+	it("still prefers a same-list match over a title-only one", () => {
+		const pairs = matchOrphansToTasks(
+			[{ path: "n.md", taskId: "", title: "Read chapter 3", projectId: "p1" }],
+			[task({ id: "right" }), task({ id: "wrong", projectId: "p9" })],
+		);
+		expect(pairs.get("n.md")).toBe("right");
+	});
+});

@@ -358,6 +358,9 @@ export default class TickTickSyncPlugin extends Plugin {
 
 	// --- Syncing ------------------------------------------------------------
 
+	/** Held across the whole pass, because the engine is rebuilt for each one. */
+	private syncInFlight = false;
+
 	async runSync(options: { silent?: boolean; dryRun?: boolean } = {}): Promise<SyncReport | null> {
 		if (!this.isConnected()) {
 			if (!options.silent) new Notice("TickTick is not connected yet. Check plugin settings.");
@@ -400,7 +403,12 @@ export default class TickTickSyncPlugin extends Plugin {
 						}),
 		});
 
-		if (engine.isRunning) return null;
+		// `engine` was built two statements ago, so its own `isRunning` is always
+		// false and never guarded anything. The flag has to outlive the engine to
+		// mean anything, or the timer firing mid-sync runs a second pass over a
+		// vault the first one is still writing to.
+		if (this.syncInFlight) return null;
+		this.syncInFlight = true;
 
 		this.setStatus("syncing");
 		try {
@@ -415,6 +423,8 @@ export default class TickTickSyncPlugin extends Plugin {
 			this.setStatus("error");
 			new Notice(`TickTick sync failed: ${describeError(error)}`);
 			return null;
+		} finally {
+			this.syncInFlight = false;
 		}
 	}
 

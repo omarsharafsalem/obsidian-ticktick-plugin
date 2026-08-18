@@ -1434,11 +1434,22 @@ export function matchOrphansToTasks(
 	const claimed = new Set(notes.map((note) => note.taskId).filter(Boolean));
 
 	const available = new Map<string, Task>();
+	// A note written by hand has no list — its `project` property was never set,
+	// or names something that is not a synced list. Keyed on list-plus-title it
+	// can never match anything, so it was never adopted: reconcile then saw a
+	// task with no note and wrote one, while the note itself still looked new and
+	// earned a task of its own. Two notes, one task. Title alone is the only
+	// evidence such a note carries, so it is indexed separately — and used only
+	// when it is unambiguous.
+	const byTitle = new Map<string, Task[]>();
 	for (const task of tasks) {
 		if (claimed.has(task.id)) continue;
 		const k = key(task.projectId, task.title);
 		// First wins; duplicate titles are ambiguous however they are resolved.
 		if (!available.has(k)) available.set(k, task);
+
+		const t = task.title.trim().toLowerCase();
+		byTitle.set(t, [...(byTitle.get(t) ?? []), task]);
 	}
 
 	const live = new Set(tasks.map((task) => task.id));
@@ -1452,10 +1463,21 @@ export function matchOrphansToTasks(
 		if (note.trackedTaskId && live.has(note.trackedTaskId)) continue;
 
 		const k = key(note.projectId, note.title);
-		const twin = available.get(k);
+		let twin = available.get(k);
+
+		// Only for a note with no list of its own, and only when exactly one task
+		// answers to the title. Two candidates is a guess, and guessing here links
+		// a note to the wrong task — worse than leaving it to be adopted by hand.
+		if (!twin && !note.projectId) {
+			const matches = byTitle.get(note.title.trim().toLowerCase()) ?? [];
+			if (matches.length === 1) twin = matches[0];
+		}
 		if (!twin) continue;
 
-		available.delete(k);
+		available.delete(key(twin.projectId, twin.title));
+		const byTitleKey = twin.title.trim().toLowerCase();
+		byTitle.delete(byTitleKey);
+		claimed.add(twin.id);
 		pairs.set(note.path, twin.id);
 	}
 
