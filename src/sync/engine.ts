@@ -109,6 +109,8 @@ interface LocalNote {
 	 * the user set by hand, on every single sync.
 	 */
 	subprojectLabel?: string;
+	/** Aliases already on the note, so writing one never drops another. */
+	aliases?: string[];
 	/** This task's own answer to the recurrence rule, when the property is set. */
 	occurrenceOverride?: OccurrenceMode;
 }
@@ -521,6 +523,7 @@ export class SyncEngine {
 					completions: parsed.completions,
 					statusLabel: readStatusLabel(note.frontmatter[settings.properties.status]),
 					subprojectLabel: readStatusLabel(note.frontmatter[settings.properties.subproject]),
+					aliases: readAliases(note.frontmatter["aliases"]),
 					// Read straight off the frontmatter rather than through the mapper:
 					// the property is the user's, never written by the plugin, and it
 					// says nothing about the task itself.
@@ -1459,7 +1462,7 @@ export class SyncEngine {
 		// A note being restored goes back where it was, provided nothing has
 		// taken the name since.
 		if (preferredPath && !notes.getFile(preferredPath)) {
-			return notes.create(preferredPath, this.render(task));
+			return this.createNamed(preferredPath, task);
 		}
 
 		const path = taskNotePath(task.title, {
@@ -1469,7 +1472,23 @@ export class SyncEngine {
 			// per-list subfolder inside it would nest a second time.
 			folderPerProject: settings.folderPerProject && !settings.listFolders[task.projectId],
 		});
-		return notes.create(path, this.render(task));
+		return this.createNamed(path, task);
+	}
+
+	/**
+	 * Creates the note, then records the real title if the file did not get the
+	 * name we asked for.
+	 *
+	 * `create` deduplicates, so a second task with the same title lands at
+	 * "… 2.md". Left alone the note would read its title back from that filename
+	 * and the next push would rename the task to match.
+	 */
+	private async createNamed(path: string, task: Task): Promise<TFile> {
+		const file = await this.deps.notes.create(path, this.render(task));
+		if (file.basename !== task.title) {
+			await this.deps.notes.write(file, this.render(task, { filenameTitle: file.basename }));
+		}
+		return file;
 	}
 
 	/** Writes a task into an existing note, renaming it when the title moved. */
@@ -1480,6 +1499,11 @@ export class SyncEngine {
 		note?: LocalNote,
 	): Promise<TFile> {
 		const { notes } = this.deps;
+
+		// Worked out before the write, so the filename judged against the title is
+		// the one the note is about to have — not the one it is leaving.
+		const desired = this.desiredNotePath(task, file, projectNames);
+
 		await notes.write(
 			file,
 			this.render(task, {
@@ -1487,12 +1511,13 @@ export class SyncEngine {
 				currentSubproject: note?.subprojectLabel,
 				privateBody: note?.privateBody,
 				completions: note?.completions,
+				filenameTitle: basenameOf(desired),
+				aliases: note?.aliases,
 			}),
 		);
 
 		// Covers a renamed task, and a task moved between lists when folders are
 		// managed by the plugin.
-		const desired = this.desiredNotePath(task, file, projectNames);
 		if (file.path !== desired) {
 			await notes.rename(file, desired);
 		}
@@ -1611,6 +1636,8 @@ export class SyncEngine {
 			privateBody?: string;
 			completions?: string[];
 			currentSubproject?: string;
+			filenameTitle?: string;
+			aliases?: string[];
 		},
 	) {
 		const { settings } = this.deps;
@@ -1632,6 +1659,8 @@ export class SyncEngine {
 			},
 			{
 				...this.links.contextFor(task),
+				filenameTitle: note?.filenameTitle,
+				currentAliases: note?.aliases,
 				// A section named in settings gets a link, so the sub-project note
 				// gathers its work through backlinks exactly as a project note does.
 				subprojectLink: task.columnId
@@ -1799,6 +1828,20 @@ export interface OrphanCandidate {
  * Pure on purpose: this is the decision that kept surviving code review and
  * failing against a real vault, and it is only checkable in isolation.
  */
+/** The note name a path ends in, without its folder or extension. */
+function basenameOf(path: string): string {
+	const file = path.slice(path.lastIndexOf("/") + 1);
+	return file.endsWith(".md") ? file.slice(0, -3) : file;
+}
+
+/** Obsidian writes aliases as a list, but tolerates a bare string. */
+function readAliases(value: unknown): string[] | undefined {
+	if (typeof value === "string") return value.trim() ? [value] : undefined;
+	if (!Array.isArray(value)) return undefined;
+	const list = value.filter((v): v is string => typeof v === "string" && v.trim() !== "");
+	return list.length > 0 ? list : undefined;
+}
+
 export function matchOrphansToTasks(
 	notes: OrphanCandidate[],
 	tasks: Task[],

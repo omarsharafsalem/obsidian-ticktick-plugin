@@ -52,6 +52,17 @@ export interface NoteContext {
 	 * it may simply be filed in a list this pass could not read sections for.
 	 */
 	currentSubproject?: string;
+	/**
+	 * The note's own filename, without the extension, when it has one yet.
+	 *
+	 * Used to notice that the file is not actually named after the task — a
+	 * collision suffix, or a name Obsidian had to alter — so the real title gets
+	 * written down rather than being silently redefined as whatever the file
+	 * ended up called.
+	 */
+	filenameTitle?: string;
+	/** Aliases the note already carries, so adding one never removes another. */
+	currentAliases?: string[];
 	parent?: TaskLink;
 	/** Derived from whichever tasks point at this one; never read back. */
 	children?: TaskLink[];
@@ -479,7 +490,31 @@ export function taskToNote(
 	// gains nothing and a punctuated one is still readable. The sync does not
 	// depend on it — the real title lives in the plugin's state — but a person
 	// reading the note otherwise has no way to see what the task is called.
-	if (titleNeedsFrontmatter(task.title)) frontmatter[p.title] = task.title;
+	// Written when the filename cannot carry the title — either because the title
+	// contains characters a filename may not hold, or because the file ended up
+	// named something else entirely, which is what a collision suffix does. Left
+	// out of an ordinary note, where it would only repeat the filename.
+	//
+	// The second case matters as much as the first: a note that landed at
+	// "Water the plants 2.md" reads its title back from the filename, so without
+	// this the next push renames the task to "Water the plants 2".
+	const filenameCannotHold =
+		titleNeedsFrontmatter(task.title) ||
+		(context.filenameTitle !== undefined && context.filenameTitle !== task.title);
+	if (filenameCannotHold) {
+		frontmatter[p.title] = task.title;
+
+		// And as an alias, so the note is still findable and linkable by the name
+		// it actually has. Obsidian resolves [[a real title]] and the quick
+		// switcher through aliases, which is the only way to reach a note whose
+		// filename is not its name. Added, never removed: the list is the user's,
+		// and a stale entry costs nothing next to deleting one they wrote.
+		const existing = context.currentAliases ?? [];
+		if (!existing.includes(task.title)) frontmatter["aliases"] = [...existing, task.title];
+		else frontmatter["aliases"] = existing;
+	} else if (context.currentAliases?.length) {
+		frontmatter["aliases"] = context.currentAliases;
+	}
 
 	const marker = options.marker;
 	if (marker?.property.trim()) frontmatter[marker.property.trim()] = marker.value;

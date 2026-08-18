@@ -133,3 +133,53 @@ describe("a title a filename cannot hold", () => {
 		expect(parse({}, "Buy milk").title).toBe("Buy milk");
 	});
 });
+
+describe("a note whose filename is not its title", () => {
+	const P3 = DEFAULT_PROPERTIES;
+	const t = (title: string) => ({ ...blankTask("p1"), id: "t1", title }) as Task;
+
+	it("records the real title and offers it as an alias", () => {
+		const fm = taskToNote(t("Read: chapter 3/4")).frontmatter;
+		expect(fm[P3.title]).toBe("Read: chapter 3/4");
+		expect(fm["aliases"]).toEqual(["Read: chapter 3/4"]);
+	});
+
+	// The collision case: `create` deduplicates, so a second task of the same
+	// title lands at "… 2.md" and would otherwise read its title back from there.
+	it("records the title when the file got a collision suffix", () => {
+		const fm = taskToNote(t("Water the plants"), undefined, {
+			filenameTitle: "Water the plants 2",
+		}).frontmatter;
+		expect(fm[P3.title]).toBe("Water the plants");
+		expect(fm["aliases"]).toEqual(["Water the plants"]);
+	});
+
+	it("writes neither when the filename says it plainly", () => {
+		const fm = taskToNote(t("Buy milk"), undefined, { filenameTitle: "Buy milk" }).frontmatter;
+		expect(fm).not.toHaveProperty(P3.title);
+		expect(fm).not.toHaveProperty("aliases");
+	});
+
+	// Aliases are the user's list. Adding one must never drop one they wrote.
+	it("keeps aliases the user already had", () => {
+		const fm = taskToNote(t("Read: chapter 3/4"), undefined, {
+			currentAliases: ["my own nickname"],
+		}).frontmatter;
+		expect(fm["aliases"]).toEqual(["my own nickname", "Read: chapter 3/4"]);
+	});
+
+	it("does not add the same alias twice", () => {
+		const fm = taskToNote(t("Read: chapter 3/4"), undefined, {
+			currentAliases: ["Read: chapter 3/4"],
+		}).frontmatter;
+		expect(fm["aliases"]).toEqual(["Read: chapter 3/4"]);
+	});
+
+	it("preserves a user's aliases on a note that needs no override", () => {
+		const fm = taskToNote(t("Buy milk"), undefined, {
+			filenameTitle: "Buy milk",
+			currentAliases: ["groceries"],
+		}).frontmatter;
+		expect(fm["aliases"]).toEqual(["groceries"]);
+	});
+});
