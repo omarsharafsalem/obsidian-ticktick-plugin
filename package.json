@@ -1,0 +1,30 @@
+{
+	"name": "obsidian-ticktick-sync",
+	"version": "0.1.0",
+	"description": "Two-way sync between TickTick and Obsidian.",
+	"main": "main.js",
+	"type": "module",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc --noEmit && node esbuild.config.mjs production",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"test:watch": "vitest"
+	},
+	"keywords": [
+		"obsidian",
+		"ticktick",
+		"tasks",
+		"sync"
+	],
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^22.10.2",
+		"builtin-modules": "^4.0.0",
+		"esbuild": "^0.24.2",
+		"obsidian": "^1.7.2",
+		"typescript": "^5.7.2",
+		"vitest": "^2.1.8",
+		"yaml": "^2.9.0"
+	}
+}
