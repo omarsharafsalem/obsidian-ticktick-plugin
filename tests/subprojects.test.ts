@@ -3,7 +3,7 @@ import { normaliseSection, normaliseTask, serialiseTask } from "../src/api/openA
 import { blankTask, type Task } from "../src/api/types";
 import { DEFAULT_PROPERTIES, DEFAULT_SETTINGS } from "../src/settings";
 import { DEFAULT_MAPPER_OPTIONS, noteToTask, taskToNote } from "../src/sync/mapper";
-import { folderForTask } from "../src/sync/engine";
+import { folderForTask, resolveBinding } from "../src/sync/engine";
 
 const P = DEFAULT_PROPERTIES;
 
@@ -217,5 +217,37 @@ describe("a list shared by several projects", () => {
 	it("falls back to the list's folder for a section with none of its own", () => {
 		const settings = { ...base, listFolders: { list1: "Tasks/Shared" } };
 		expect(folderForTask({ projectId: "list1", columnId: "sect9" }, settings)).toBe("Tasks/Shared");
+	});
+});
+
+// A project note declaring which TickTick list it is, rather than the same fact
+// being typed a second time into plugin settings.
+describe("a binding declared in the vault", () => {
+	const found = (m: Record<string, string[]>) => new Map(Object.entries(m));
+
+	it("links the list to the note that claims it", () => {
+		expect(resolveBinding("list1", {}, found({ list1: ["Alpha Project Home"] }))).toBe(
+			"Alpha Project Home",
+		);
+	});
+
+	// Someone who typed it into settings meant it.
+	it("lets an explicit setting win", () => {
+		expect(
+			resolveBinding("list1", { list1: "Chosen By Hand" }, found({ list1: ["Alpha Project Home"] })),
+		).toBe("Chosen By Hand");
+	});
+
+	// Filing work under a project that may not own it is worse than leaving it unset.
+	it("resolves to neither when two notes claim the same list", () => {
+		expect(resolveBinding("list1", {}, found({ list1: ["Alpha", "Beta"] }))).toBeUndefined();
+	});
+
+	it("is undefined when nothing claims it", () => {
+		expect(resolveBinding("list9", {}, found({ list1: ["Alpha"] }))).toBeUndefined();
+	});
+
+	it("is undefined for a task with no section", () => {
+		expect(resolveBinding(undefined, {}, found({ list1: ["Alpha"] }))).toBeUndefined();
 	});
 });

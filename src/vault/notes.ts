@@ -154,6 +154,32 @@ export class NoteRepository {
 			.filter((file) => file.path === root || file.path.startsWith(`${root}/`));
 	}
 
+	/**
+	 * Every note declaring a value for `property`, keyed by that value.
+	 *
+	 * How a project note says which TickTick list or section it stands for. The
+	 * binding belongs on the note it is about rather than in plugin settings: it
+	 * is visible when you open the note, it survives a settings reset, and it
+	 * travels with the vault.
+	 *
+	 * Read from Obsidian's own metadata cache, so this costs no file reads.
+	 * First declaration wins — two notes claiming the same list is ambiguous
+	 * however it is resolved, and the caller reports it rather than guessing.
+	 */
+	bindingsFor(property: string): Map<string, TFile[]> {
+		const found = new Map<string, TFile[]>();
+		const key = property.trim();
+		if (!key) return found;
+
+		for (const file of this.app.vault.getMarkdownFiles()) {
+			const raw = this.app.metadataCache?.getFileCache(file)?.frontmatter?.[key];
+			const value = typeof raw === "string" ? raw.trim() : "";
+			if (!value) continue;
+			found.set(value, [...(found.get(value) ?? []), file]);
+		}
+		return found;
+	}
+
 	async ensureFolder(path: string): Promise<void> {
 		const normalised = normalizePath(path);
 		if (!normalised || normalised === "/" || normalised === ".") return;

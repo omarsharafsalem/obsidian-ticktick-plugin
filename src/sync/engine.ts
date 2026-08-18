@@ -178,6 +178,14 @@ export class SyncEngine {
 	private readonly sectionIdsByName = new Map<string, string[]>();
 
 	/**
+	 * List or section id → the note that claims it, found by scanning the vault.
+	 *
+	 * The alternative to configuring the same fact twice. A project note saying
+	 * which list it is *is* the binding, so nothing has to be kept in step.
+	 */
+	private readonly boundNotes = new Map<string, string>();
+
+	/**
 	 * The finished occurrences of repeating tasks seen this pass, by their own id.
 	 *
 	 * Rebuilt every pass, like the link index, and for the same reason: it is
@@ -219,6 +227,7 @@ export class SyncEngine {
 			this.sections.clear();
 			this.sectionNames.clear();
 			this.sectionIdsByName.clear();
+			this.discoverBindings(report);
 			this.completedFetched = false;
 			this.occurrenceNotes = 0;
 			this.occurrenceCapReported = false;
@@ -780,7 +789,7 @@ export class SyncEngine {
 				const parent = task.parentId ? byId.get(task.parentId) : undefined;
 				return {
 					projectName: projectNames.get(task.projectId),
-					projectLink: projectPageLink(this.deps.settings.listPages[task.projectId]),
+					projectLink: projectPageLink(this.noteBoundTo(task.projectId)),
 					parent: parent ? linkFor(parent) : undefined,
 					children: children.get(task.id),
 				};
@@ -1669,12 +1678,8 @@ export class SyncEngine {
 				// several projects — a shared list with a section each — and then the
 				// section answers "which project", leaving no sub-project to name.
 				...(task.columnId && this.deps.settings.sectionIsProject[task.columnId]
-					? { projectLink: projectPageLink(this.deps.settings.listPages[task.columnId]) }
-					: {
-							subprojectLink: task.columnId
-								? projectPageLink(this.deps.settings.listPages[task.columnId])
-								: undefined,
-						}),
+					? { projectLink: projectPageLink(this.noteBoundTo(task.columnId)) }
+					: { subprojectLink: projectPageLink(this.noteBoundTo(task.columnId)) }),
 				...note,
 			},
 		);
@@ -1691,6 +1696,46 @@ export class SyncEngine {
 	 */
 	private folderFor(task: Task): string {
 		return folderForTask(task, this.deps.settings, this.projectKinds.get(task.projectId));
+	}
+
+	/**
+	 * Reads the vault's own account of which note stands for which list or section.
+	 *
+	 * Ambiguity is reported rather than resolved: two notes claiming one list is a
+	 * mistake worth seeing, and picking one of them would hide it while filing
+	 * work under a project that may not own it.
+	 */
+	private discoverBindings(report: SyncReport): void {
+		const { notes, settings } = this.deps;
+		this.boundNotes.clear();
+
+		for (const property of [settings.listBindingProperty, settings.sectionBindingProperty]) {
+			if (!property?.trim()) continue;
+
+			for (const [id, files] of notes.bindingsFor(property)) {
+				if (files.length > 1) {
+					report.errors.push(
+						`${files.length} notes claim the same ${property} "${id}" — ` +
+							`${files.map((f) => f.path).join(", ")}. None of them was used; ` +
+							"remove the property from all but one.",
+					);
+					continue;
+				}
+				this.boundNotes.set(id, files[0].basename);
+			}
+		}
+
+		if (this.boundNotes.size > 0) {
+			this.deps.log("Bindings found in the vault", Object.fromEntries(this.boundNotes));
+		}
+	}
+
+	/** The note a list or section is bound to, however that binding was made. */
+	private noteBoundTo(id: string | undefined): string | undefined {
+		if (!id) return undefined;
+		const explicit = this.deps.settings.listPages[id]?.trim();
+		if (explicit) return explicit;
+		return this.boundNotes.get(id);
 	}
 
 	/** The folder and note type this task's list has been routed to. */
@@ -1856,6 +1901,26 @@ function readAliases(value: unknown): string[] | undefined {
  *
  * Archiving a completed task still overrides everything.
  */
+/**
+ * Turns "a project note claims this list" into the link a task note carries.
+ *
+ * Pure so the precedence is testable on its own: an explicit setting wins,
+ * because someone who typed it in meant it, and a claim in the vault answers
+ * everywhere else. Two notes claiming the same id resolve to neither — filing
+ * work under the wrong project is worse than leaving it plainly unset.
+ */
+export function resolveBinding(
+	id: string | undefined,
+	configured: Record<string, string>,
+	discovered: Map<string, string[]>,
+): string | undefined {
+	if (!id) return undefined;
+	const explicit = configured[id]?.trim();
+	if (explicit) return explicit;
+	const claims = discovered.get(id);
+	return claims?.length === 1 ? claims[0] : undefined;
+}
+
 export function folderForTask(
 	task: { projectId: string; columnId?: string; status?: Task["status"] },
 	settings: TickTickSyncSettings,

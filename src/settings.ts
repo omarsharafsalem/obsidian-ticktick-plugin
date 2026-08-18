@@ -384,6 +384,21 @@ export interface TickTickSyncSettings {
 	sectionIsProject: Record<string, boolean>;
 
 	/**
+	 * Frontmatter property by which a project note claims a TickTick list.
+	 *
+	 * A note saying `ticktick_list_id: <id>` binds that list to itself, and every
+	 * task in the list is linked to it — no per-list setting, nothing to keep in
+	 * step. Settings still work, and win where both are given, so an existing
+	 * install is unaffected and a deliberate override stays possible.
+	 *
+	 * Blank turns discovery off.
+	 */
+	listBindingProperty: string;
+
+	/** The same thing one level down: a note claiming a section. */
+	sectionBindingProperty: string;
+
+	/**
 	 * Most new TickTick tasks one sync may create before it stops.
 	 *
 	 * Creating a task is the only operation that multiplies: a note that fails to
@@ -509,6 +524,8 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	listFolders: {},
 	listPages: {},
 	sectionIsProject: {},
+	listBindingProperty: "ticktick_list_id",
+	sectionBindingProperty: "ticktick_section_id",
 	deletedTaskFolder: "🗄️ Archive",
 	syncedRegionMarker: "<!-- ticktick:end -->",
 	linkBackToNote: true,
