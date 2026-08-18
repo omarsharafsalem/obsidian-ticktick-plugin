@@ -6,6 +6,7 @@ import type {
 	RemoteDeletionPolicy,
 } from "./sync/reconcile";
 import type { OAuthTokens } from "./auth/oauth";
+import type { SyncState } from "./sync/state";
 
 /**
  * Names of the Obsidian properties each TickTick field maps onto.
@@ -186,6 +187,21 @@ export interface TickTickSyncSettings {
 	auth: AuthSettings;
 
 	/**
+	 * Whether the user has started syncing, as opposed to merely connected.
+	 *
+	 * A working token proves only that the account can be reached. What a sync
+	 * actually *does* is decided by everything else on this page — the property
+	 * names, the value labels, the task marker, which lists, which folders — and
+	 * none of it is right until it has been filled in. A sync that runs before
+	 * then writes notes across the vault that then have to be undone by hand, so
+	 * no task note is read or written until this is switched on deliberately.
+	 *
+	 * Listing lists is deliberately outside the gate: choosing them is part of
+	 * the configuring this is protecting.
+	 */
+	syncingStarted: boolean;
+
+	/**
 	 * The property that marks a note as a task, e.g. `note_type: task`.
 	 *
 	 * Without it the only thing separating a task from an ordinary note is which
@@ -361,6 +377,7 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 		tokens: null,
 		loopbackPort: 8484,
 	},
+	syncingStarted: false,
 	taskMarker: { property: "", value: "task" },
 	discoverAnywhere: false,
 	taskFolder: "Tasks",
@@ -426,12 +443,55 @@ function toStatusList(value: unknown, fallback: string[]): string[] {
 	return cleaned.length > 0 ? cleaned : fallback;
 }
 
-/** Merges stored settings over the defaults, tolerating older shapes. */
-export function mergeSettings(stored: unknown): TickTickSyncSettings {
+/**
+ * Whether this vault has synced before, judged from the sync state on disk.
+ *
+ * Read from the state exactly as stored, not from the migrated one: state
+ * written by an older version is discarded on load, and an install whose history
+ * was just discarded would read as brand new — which is precisely the install
+ * that must not be quietly switched off.
+ */
+export function hasSyncedBefore(storedState: unknown): boolean {
+	if (!storedState || typeof storedState !== "object") return false;
+
+	const raw = storedState as Partial<SyncState>;
+	if (typeof raw.lastFullSync === "number") return true;
+
+	// Tombstones count as well: a task deleted through this plugin is proof a
+	// pass ran, even if every entry has since been forgotten.
+	return Object.keys(raw.entries ?? {}).length > 0 || Object.keys(raw.tombstones ?? {}).length > 0;
+}
+
+/**
+ * Whether syncing should already be under way for settings written earlier.
+ *
+ * The switch is newer than the installs it has to serve, so a vault that has
+ * been syncing for months has nothing stored for it — and reading that absence
+ * as "not started" would silently stop a sync that was working. The vault's own
+ * sync state settles it. Without that evidence it stays off: being asked to
+ * press a button costs a moment, while a first sync nobody was ready for costs
+ * an afternoon of undoing notes by hand.
+ */
+function resolveSyncingStarted(
+	raw: Partial<TickTickSyncSettings>,
+	storedState: unknown,
+): boolean {
+	if (typeof raw.syncingStarted === "boolean") return raw.syncingStarted;
+	return hasSyncedBefore(storedState);
+}
+
+/**
+ * Merges stored settings over the defaults, tolerating older shapes.
+ *
+ * `storedState` is the persisted sync state that sits alongside them, needed
+ * only to tell an upgrade from a fresh install — see {@link resolveSyncingStarted}.
+ */
+export function mergeSettings(stored: unknown, storedState?: unknown): TickTickSyncSettings {
 	const raw = (stored ?? {}) as Partial<TickTickSyncSettings>;
 	return {
 		...DEFAULT_SETTINGS,
 		...raw,
+		syncingStarted: resolveSyncingStarted(raw, storedState),
 		auth: { ...DEFAULT_SETTINGS.auth, ...(raw.auth ?? {}) },
 		properties: { ...DEFAULT_PROPERTIES, ...(raw.properties ?? {}) },
 		fieldModes: { ...DEFAULT_FIELD_MODES, ...(raw.fieldModes ?? {}) },
