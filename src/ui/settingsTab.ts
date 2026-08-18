@@ -6,6 +6,7 @@ import {
 	type Priority,
 	type Project,
 	type ProjectKind,
+	type Section,
 	type SyncedField,
 	type TaskStatus,
 } from "../api/types";
@@ -32,6 +33,7 @@ const FIELD_LABELS: Record<SyncedField, string> = {
 	repeatFlag: "Recurrence",
 	items: "Subtasks",
 	projectId: "List",
+	columnId: "Sub-project (section)",
 	parentId: "Parent task",
 };
 
@@ -43,6 +45,7 @@ const KIND_LABELS: Record<ProjectKind, string> = {
 const PROPERTY_LABELS: Record<keyof PropertyNames, string> = {
 	id: "Task ID",
 	project: "List",
+	subproject: "Sub-project",
 	title: "Title override",
 	status: "Status",
 	priority: "Priority",
@@ -80,6 +83,15 @@ type TabId = (typeof TABS)[number]["id"];
 export class TickTickSettingTab extends PluginSettingTab {
 	/** Lists fetched from TickTick, cached so the tab can redraw without refetching. */
 	private projects: Project[] | null = null;
+
+	/**
+	 * Sections found in the lists being synced, by list id.
+	 *
+	 * Fetched with the lists rather than stored, because a section is TickTick's
+	 * to rename or remove. They are here so a sub-project can be pointed at its
+	 * note — the same wiring a list already has, one level down.
+	 */
+	private sections = new Map<string, Section[]>();
 
 	/** Survives redraws, so toggling a setting does not throw you back to the top. */
 	private activeTab: TabId = "connection";
@@ -681,8 +693,23 @@ export class TickTickSettingTab extends PluginSettingTab {
 
 				button.setDisabled(true).setButtonText("Loading…");
 				try {
-					this.projects = await this.plugin.createClient().listProjects();
+					const client = this.plugin.createClient();
+					this.projects = await client.listProjects();
 					if (this.projects.length === 0) new Notice("TickTick returned no lists.");
+
+					// Only for lists actually being synced: sections come from the
+					// per-list read, so asking about every list would be a request per
+					// list for answers nobody wants.
+					this.sections = new Map();
+					for (const id of settings.projectFilter) {
+						try {
+							const { sections } = await client.listTasksInProject(id);
+							if (sections.length > 0) this.sections.set(id, sections);
+						} catch {
+							// A list that will not answer is reported by the sync itself;
+							// failing to offer its sections is not worth an error here.
+						}
+					}
 					this.display();
 				} catch (error) {
 					new Notice(
@@ -770,6 +797,29 @@ export class TickTickSettingTab extends PluginSettingTab {
 						setting.setDesc(summarise());
 					}),
 				);
+
+			// One row per section, so a sub-project can be pointed at its note the
+			// same way its project is. A section is the only container TickTick has
+			// below a list, which is what makes it the place a sub-project lives.
+			for (const section of this.sections.get(project.id) ?? []) {
+				new Setting(root)
+					.setClass("ticktick-subproject-row")
+					.setName(`↳ ${section.name}`)
+					.setDesc(
+						"A section of this list, treated as a sub-project. Name the note for it and " +
+							"the sub-project property becomes a link, so its tasks show up in that " +
+							"note's backlinks.",
+					)
+					.addText((text) => {
+						text.setPlaceholder("Sub-project note");
+						text.setValue(settings.listPages[section.id] ?? "").onChange(async (value) => {
+							const page = value.trim();
+							if (page) settings.listPages[section.id] = page;
+							else delete settings.listPages[section.id];
+							await this.plugin.saveSettings();
+						});
+					});
+			}
 		}
 	}
 
@@ -906,6 +956,7 @@ export class TickTickSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 				);
+
 		}
 
 		root.createEl("p", {
@@ -926,6 +977,7 @@ export class TickTickSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 				);
+
 		}
 	}
 
@@ -1029,6 +1081,7 @@ export class TickTickSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 				);
+
 		}
 	}
 

@@ -5,7 +5,9 @@ import {
 	type ChecklistItem,
 	type NewTask,
 	type Project,
+	type ProjectContents,
 	type ProjectKind,
+	type Section,
 	type Task,
 	type TaskKind,
 	priorityFromWire,
@@ -140,6 +142,8 @@ export function normaliseTask(raw: unknown): Task {
 		kind,
 		content: stripNoteLink(reclassified ? spareField : bodyField),
 		inactiveBody: reclassified ? "" : spareField,
+		columnId: asString(task["columnId"]),
+		columnName: asString(task["columnName"]),
 		status: statusFromWire(task["status"]),
 		priority: priorityFromWire(task["priority"]),
 		tags: asArray(task["tags"]).filter((t): t is string => typeof t === "string"),
@@ -155,6 +159,15 @@ export function normaliseTask(raw: unknown): Task {
 		modifiedTime: fromTickTickDate(task["modifiedTime"]),
 		completedTime: fromTickTickDate(task["completedTime"]),
 		sortOrder: typeof task["sortOrder"] === "number" ? task["sortOrder"] : undefined,
+	};
+}
+
+export function normaliseSection(raw: unknown): Section {
+	const column = (raw ?? {}) as Json;
+	return {
+		id: asString(column["id"]) ?? "",
+		projectId: asString(column["projectId"]) ?? "",
+		name: asString(column["name"]) ?? "",
 	};
 }
 
@@ -202,6 +215,11 @@ export function serialiseTask(task: NewTask & { id?: string }): Json {
 	}
 
 	if (kind) body["kind"] = kind;
+
+	// Only ever sent when we have one. Sending an empty string would move the
+	// task out of whatever section it is in, and "we could not work out which
+	// section" is not the same as "no section".
+	if (task.columnId) body["columnId"] = task.columnId;
 
 	if (task.id) body["id"] = task.id;
 	if (task.tags.length > 0) body["tags"] = task.tags;
@@ -294,7 +312,7 @@ export class OpenApiClient implements TickTickClient {
 		];
 	}
 
-	async listTasksInProject(projectId: string): Promise<Task[]> {
+	async listTasksInProject(projectId: string): Promise<ProjectContents> {
 		// The Inbox has no `/project/{id}/data` endpoint; the filter endpoint is
 		// the only route to it. That caps the Inbox at 200 tasks per sync.
 		//
@@ -306,7 +324,8 @@ export class OpenApiClient implements TickTickClient {
 				projectIds: [INBOX_PROJECT_ID],
 				status: [0],
 			});
-			return asArray(raw).map(normaliseTask);
+			// The Inbox has no sections; it is not a list you can organise.
+			return { tasks: asArray(raw).map(normaliseTask), sections: [] };
 		}
 
 		// A 404 here used to answer with an empty array, on the reasoning that a
@@ -317,7 +336,12 @@ export class OpenApiClient implements TickTickClient {
 		// it looks deleted. Letting it throw is what keeps those notes safe.
 		{
 			const raw = (await this.send("GET", `/project/${projectId}/data`)) as Json | undefined;
-			return asArray(raw?.["tasks"]).map(normaliseTask);
+			return {
+				tasks: asArray(raw?.["tasks"]).map(normaliseTask),
+				// Sections arrive on this same read — a third key alongside `project`
+				// and `tasks` — so knowing them costs nothing extra.
+				sections: asArray(raw?.["columns"]).map(normaliseSection),
+			};
 		}
 	}
 

@@ -1,4 +1,4 @@
-import type { NewTask, Project, Task } from "./types";
+import type { NewTask, Project, ProjectContents, Task } from "./types";
 
 /**
  * What a given backend can actually do.
@@ -36,8 +36,14 @@ export interface TickTickClient {
 
 	listProjects(): Promise<Project[]>;
 
-	/** Tasks that are currently open in the given project. */
-	listTasksInProject(projectId: string): Promise<Task[]>;
+	/**
+	 * What is currently open in the given project, and the sections it holds.
+	 *
+	 * Both come from one read, so the sections are free. They matter because a
+	 * section is the only container below a list, and therefore the only thing a
+	 * task can carry that says which sub-project it belongs to.
+	 */
+	listTasksInProject(projectId: string): Promise<ProjectContents>;
 
 	/** Resolves to null when the task no longer exists (HTTP 404). */
 	getTask(projectId: string, taskId: string): Promise<Task | null>;

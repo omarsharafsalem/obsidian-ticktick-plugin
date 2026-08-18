@@ -66,7 +66,7 @@ function fakeClient(tasks: Task[], writes: Writes): TickTickClient {
 	return {
 		capabilities: { completedHistory: true, modifiedTime: false, inbox: true },
 		listProjects: async () => [project],
-		listTasksInProject: async () => tasks,
+		listTasksInProject: async () => ({ tasks, sections: [] }),
 		getTask: async () => null,
 		listCompletedTasks: async () => [],
 		createTask: async (task: NewTask) => {
@@ -242,7 +242,7 @@ describe("the read-only dependencies", () => {
 		expect(writes).toEqual([]);
 
 		expect(await client.listProjects()).toHaveLength(1);
-		expect(await client.listTasksInProject("list-a")).toHaveLength(1);
+		expect((await client.listTasksInProject("list-a")).tasks).toHaveLength(1);
 	});
 
 	it("refuses every write on the vault and allows every read", async () => {

@@ -85,14 +85,43 @@ export interface Task {
 	items: ChecklistItem[];
 	/** Server-side optimistic-locking token, when the backend supplies one. */
 	etag?: string;
-	/** ISO 8601. Only the v2 API reports this; Open API leaves it undefined. */
+	/** ISO 8601. The Open API does report this, contrary to its own docs. */
 	modifiedTime?: string;
 	completedTime?: string;
 	sortOrder?: number;
+
+	/** Section this task sits in, when it is in one. */
+	columnId?: string;
+	/**
+	 * The section's name, as returned alongside the task.
+	 *
+	 * Carried because it is what a person reads and what a note shows; the id is
+	 * only useful for writing back.
+	 */
+	columnName?: string;
 }
 
 /** A task that does not exist remotely yet. */
 export type NewTask = Omit<Task, "id" | "etag" | "modifiedTime">;
+
+/**
+ * A section within a list — TickTick's own name for it is a column.
+ *
+ * Shown as a section header in list view and as a column on a board; the same
+ * object either way. It is the only container TickTick has *below* a list, which
+ * is what makes it the one place a sub-project can live.
+ */
+export interface Section {
+	id: string;
+	projectId: string;
+	name: string;
+}
+
+/** A list's contents as one read: `/project/{id}/data` returns both. */
+export interface ProjectContents {
+	tasks: Task[];
+	sections: Section[];
+}
 
 export interface Project {
 	id: string;
@@ -113,6 +142,7 @@ export interface Project {
 /** The subset of {@link Task} that participates in field-level merging. */
 export const SYNCED_FIELDS = [
 	"title",
+	"columnId",
 	"content",
 	"status",
 	"priority",

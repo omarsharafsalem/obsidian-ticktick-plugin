@@ -120,8 +120,8 @@ class FakeClient implements TickTickClient {
 		return [LIST];
 	}
 
-	async listTasksInProject(projectId: string): Promise<Task[]> {
-		return this.open.filter((task) => task.projectId === projectId);
+	async listTasksInProject(projectId: string): Promise<{ tasks: Task[]; sections: [] }> {
+		return { tasks: this.open.filter((task) => task.projectId === projectId), sections: [] };
 	}
 
 	async getTask(): Promise<Task | null> {

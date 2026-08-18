@@ -18,6 +18,8 @@ import type { SyncState } from "./sync/state";
 export interface PropertyNames {
 	id: string;
 	project: string;
+	/** The sub-project — a section inside the list. */
+	subproject: string;
 	status: string;
 	priority: string;
 	due: string;
@@ -42,6 +44,7 @@ export interface PropertyNames {
 export const DEFAULT_PROPERTIES: PropertyNames = {
 	id: "ticktick_task_id",
 	project: "project",
+	subproject: "subproject",
 	status: "status",
 	title: "ticktick_title",
 	priority: "priority",
@@ -71,6 +74,7 @@ export const PROPERTY_TYPES: Partial<Record<keyof PropertyNames, string>> = {
 	status: "multitext",
 	priority: "multitext",
 	project: "multitext",
+	subproject: "multitext",
 	parent: "text",
 	children: "multitext",
 };
@@ -153,6 +157,7 @@ export type FieldModes = Record<SyncedField, FieldSyncMode>;
 
 export const DEFAULT_FIELD_MODES: FieldModes = {
 	title: "both",
+	columnId: "both",
 	content: "both",
 	status: "both",
 	priority: "both",

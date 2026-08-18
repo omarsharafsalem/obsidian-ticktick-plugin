@@ -42,9 +42,9 @@ class FakeClient implements TickTickClient {
 		return this.projects;
 	}
 
-	async listTasksInProject(projectId: string): Promise<Task[]> {
+	async listTasksInProject(projectId: string): Promise<{ tasks: Task[]; sections: [] }> {
 		if (this.failing.has(projectId)) throw new Error("the list could not be read");
-		return this.tasks.get(projectId) ?? [];
+		return { tasks: this.tasks.get(projectId) ?? [], sections: [] };
 	}
 
 	async getTask(): Promise<Task | null> {

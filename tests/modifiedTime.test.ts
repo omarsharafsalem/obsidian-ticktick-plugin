@@ -97,7 +97,7 @@ describe("which endpoint each list is read from", () => {
 	});
 
 	it("hands the modification time on from the list it read", async () => {
-		const tasks = await clientRecording([], { tasks: [LIVE_TASK] }).listTasksInProject("p1");
+		const { tasks } = await clientRecording([], { tasks: [LIVE_TASK] }).listTasksInProject("p1");
 
 		expect(tasks[0].modifiedTime).toBe("2026-08-17T19:01:17.084Z");
 	});

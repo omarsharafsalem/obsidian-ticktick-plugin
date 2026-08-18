@@ -101,6 +101,14 @@ interface LocalNote {
 	completions: string[];
 	/** What the status property says now, so an equivalent wording survives. */
 	statusLabel?: string;
+	/**
+	 * What the note's sub-project property says right now.
+	 *
+	 * Carried because `NoteRepository.write` removes any managed property absent
+	 * from the write. A task in no section would therefore erase a sub-project
+	 * the user set by hand, on every single sync.
+	 */
+	subprojectLabel?: string;
 	/** This task's own answer to the recurrence rule, when the property is set. */
 	occurrenceOverride?: OccurrenceMode;
 }
@@ -158,6 +166,15 @@ export class SyncEngine {
 	 */
 	private completedFetched = false;
 
+	/** `listId::lowercased section name` → section id, for resolving a push. */
+	private readonly sections = new Map<string, string>();
+
+	/** Section id → its name, for tasks that report an id we have a name for. */
+	private readonly sectionNames = new Map<string, string>();
+
+	/** Lowercased section name → every id bearing it, across all lists. */
+	private readonly sectionIdsByName = new Map<string, string[]>();
+
 	/**
 	 * The finished occurrences of repeating tasks seen this pass, by their own id.
 	 *
@@ -197,6 +214,9 @@ export class SyncEngine {
 				projects.all.filter((p) => p.kind).map((p) => [p.id, p.kind as ProjectKind]),
 			);
 			this.inboxAliases.clear();
+			this.sections.clear();
+			this.sectionNames.clear();
+			this.sectionIdsByName.clear();
 			this.completedFetched = false;
 			this.occurrenceNotes = 0;
 			this.occurrenceCapReported = false;
@@ -301,7 +321,20 @@ export class SyncEngine {
 
 		for (const project of projects) {
 			try {
-				const tasks = await this.deps.client.listTasksInProject(project.id);
+				const { tasks, sections } = await this.deps.client.listTasksInProject(project.id);
+
+				// Sections are how a task says which sub-project it belongs to, and
+				// the only way back from the name a note carries to the id a push
+				// needs. Indexed per list, because two lists may name a section alike.
+				for (const section of sections) {
+					this.sections.set(`${project.id}::${section.name.trim().toLowerCase()}`, section.id);
+					this.sectionNames.set(section.id, section.name);
+					const byName = section.name.trim().toLowerCase();
+					this.sectionIdsByName.set(byName, [
+						...(this.sectionIdsByName.get(byName) ?? []),
+						section.id,
+					]);
+				}
 
 				// Marked read only once the call has returned, and only when it
 				// plainly returned everything. A listing filled exactly to the
@@ -421,6 +454,13 @@ export class SyncEngine {
 				idsByName.get(nameOrId.trim().toLowerCase()) ??
 				(projectNames.has(nameOrId) ? nameOrId : undefined),
 			resolveTaskLink: this.links.resolveTaskLink,
+			// Only when exactly one section answers to the name. Two lists may name
+			// a section alike, and filing a task under the wrong sub-project is a
+			// worse outcome than leaving the property for a person to settle.
+			resolveSection: (nameOrLink: string) => {
+				const ids = this.sectionIdsByName.get(nameOrLink.trim().toLowerCase()) ?? [];
+				return ids.length === 1 ? ids[0] : undefined;
+			},
 		};
 
 		// Folders mapped to a list, longest first so a nested mapping wins over the
@@ -480,6 +520,7 @@ export class SyncEngine {
 					privateBody: parsed.privateBody,
 					completions: parsed.completions,
 					statusLabel: readStatusLabel(note.frontmatter[settings.properties.status]),
+					subprojectLabel: readStatusLabel(note.frontmatter[settings.properties.subproject]),
 					// Read straight off the frontmatter rather than through the mapper:
 					// the property is the user's, never written by the plugin, and it
 					// says nothing about the task itself.
@@ -1416,6 +1457,7 @@ export class SyncEngine {
 			file,
 			this.render(task, {
 				currentStatus: note?.statusLabel,
+				currentSubproject: note?.subprojectLabel,
 				privateBody: note?.privateBody,
 				completions: note?.completions,
 			}),
@@ -1470,6 +1512,7 @@ export class SyncEngine {
 			file,
 			this.render(merged, {
 				currentStatus: note?.statusLabel,
+				currentSubproject: note?.subprojectLabel,
 				privateBody: note?.privateBody,
 				completions: note?.completions,
 			}),
@@ -1508,7 +1551,12 @@ export class SyncEngine {
 
 	private render(
 		task: Task,
-		note?: { currentStatus?: string; privateBody?: string; completions?: string[] },
+		note?: {
+			currentStatus?: string;
+			privateBody?: string;
+			completions?: string[];
+			currentSubproject?: string;
+		},
 	) {
 		const { settings } = this.deps;
 		return taskToNote(
@@ -1527,7 +1575,15 @@ export class SyncEngine {
 				syncedRegionMarker: settings.syncedRegionMarker,
 				useTaskTimeZone: settings.showTimesIn === "task",
 			},
-			{ ...this.links.contextFor(task), ...note },
+			{
+				...this.links.contextFor(task),
+				// A section named in settings gets a link, so the sub-project note
+				// gathers its work through backlinks exactly as a project note does.
+				subprojectLink: task.columnId
+					? projectPageLink(this.deps.settings.listPages[task.columnId])
+					: undefined,
+				...note,
+			},
 		);
 	}
 

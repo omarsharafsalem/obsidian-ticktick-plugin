@@ -42,6 +42,16 @@ export interface NoteContext {
 	 * backlinks, which is how a project page gathers its own work.
 	 */
 	projectLink?: TaskLink;
+	/** The note representing this task's section, when one is configured. */
+	subprojectLink?: TaskLink;
+	/**
+	 * What the note's sub-project property says now.
+	 *
+	 * Kept so it can be left exactly as it is when the task reports no section.
+	 * A task with no section is not a task whose sub-project has been cleared —
+	 * it may simply be filed in a list this pass could not read sections for.
+	 */
+	currentSubproject?: string;
 	parent?: TaskLink;
 	/** Derived from whichever tasks point at this one; never read back. */
 	children?: TaskLink[];
@@ -133,6 +143,13 @@ export interface MapperOptions {
 	 * account's lists; kept as a plain function so this module stays pure.
 	 */
 	resolveProject?: (nameOrId: string) => string | undefined;
+	/**
+	 * Turns whatever is written in the sub-project property back into a section id.
+	 *
+	 * Scoped to the note's own list by the caller, since two lists may name a
+	 * section alike and the wrong id files the task under the wrong sub-project.
+	 */
+	resolveSection?: (nameOrLink: string) => string | undefined;
 	/** The words this vault uses for statuses, priorities and reminders. */
 	labels?: ValueLabels;
 	/** Turns a wikilink target — a note title or path — back into a task id. */
@@ -241,6 +258,8 @@ export interface ParsedNote {
 	/** Undefined for a note the user wrote by hand that has never synced. */
 	id?: string;
 	projectId?: string;
+	/** Section id the sub-project property resolved to, when it resolved. */
+	columnId?: string;
 	/**
 	 * The status describes filing, not progress — "Archived" and the like.
 	 *
@@ -447,6 +466,14 @@ export function taskToNote(
 		[p.status]: statusToWrite(task.status, labels, context.currentStatus),
 		[p.priority]: labels.priority[task.priority] ?? task.priority,
 	};
+
+	// Written only when the task actually reports a section, or when the note
+	// already had one to keep. Writing an empty value on every task with no
+	// section is how a sub-project set by hand would be wiped by the next sync.
+	const subproject = context.subprojectLink
+		? formatWikilink(context.subprojectLink)
+		: (task.columnName ?? context.currentSubproject);
+	if (subproject) frontmatter[p.subproject] = subproject;
 
 	// Written only when the filename cannot carry the title, so an ordinary task
 	// gains nothing and a punctuated one is still readable. The sync does not
@@ -696,12 +723,23 @@ export function noteToTask(
 			: (options.resolveProject?.(projectRef) ?? projectRef)
 		: undefined;
 
+	// Resolved back to a section id the same way the list is: a link is followed,
+	// a plain name is looked up, and anything that resolves to nothing is left
+	// undefined rather than guessed at — an unresolved name is not an id, and
+	// sending a wrong one files the task under the wrong sub-project.
+	const subprojectRef = readString(readProperty(fm, p, "subproject"));
+	const subprojectTarget = subprojectRef ? parseWikilink(subprojectRef) : undefined;
+	const columnId = subprojectRef
+		? options.resolveSection?.(subprojectTarget ?? subprojectRef)
+		: undefined;
+
 	const statusRaw = readScalar(fm[p.status]);
 	const statusNeutral = typeof statusRaw === "string" && isNeutralStatus(statusRaw, labels);
 
 	return {
 		id: readString(readProperty(fm, p, "id")),
 		projectId,
+		columnId,
 		statusNeutral,
 		privateBody,
 		completions,
@@ -824,5 +862,9 @@ export function parsedNoteToTask(parsed: ParsedNote, base: Task): Task {
 		status: parsed.statusNeutral ? base.status : parsed.status,
 		items: parsed.items,
 		projectId: parsed.projectId ?? base.projectId,
+		// Falls back to the section the task already had. The property being
+		// unreadable — a link to a note that no longer exists, a name that matches
+		// no section — must not read as "move this out of its sub-project".
+		columnId: parsed.columnId ?? base.columnId,
 	};
 }
