@@ -115,7 +115,14 @@ export class NoteRepository {
 	async rename(file: TFile, path: string): Promise<TFile> {
 		if (file.path === path) return file;
 		await this.ensureFolder(parentFolder(path));
-		const target = await this.uniquePath(path);
+
+		// A file never blocks its own name. Two tasks sharing a title is ordinary —
+		// a repeating task's finished occurrences all carry its — and the second one
+		// settles at "Water the plants 2". Counting that as taken would walk it one
+		// suffix further on every write it was part of, forever.
+		const target = await this.uniquePath(path, file.path);
+		if (file.path === target) return file;
+
 		await this.app.fileManager.renameFile(file, target);
 		return file;
 	}
@@ -164,18 +171,22 @@ export class NoteRepository {
 		}
 	}
 
-	/** Appends a numeric suffix when the desired path is taken. */
-	private async uniquePath(path: string): Promise<string> {
+	/**
+	 * Appends a numeric suffix when the desired path is taken.
+	 *
+	 * `except` is the path of the file being moved, which must not count against
+	 * itself — see {@link rename}.
+	 */
+	private async uniquePath(path: string, except?: string): Promise<string> {
 		const normalised = normalizePath(path);
+		const key = (value: string): string => value.normalize("NFC").toLowerCase();
 
 		// Compared case- and Unicode-insensitively, because the filesystem is:
 		// on macOS "Buy Milk.md" and "buy milk.md" are the same file, and an
 		// accented title can be stored decomposed while the index holds it composed.
-		const taken = new Set(
-			this.app.vault.getFiles().map((file) => file.path.normalize("NFC").toLowerCase()),
-		);
-		const isTaken = (candidate: string): boolean =>
-			taken.has(candidate.normalize("NFC").toLowerCase());
+		const taken = new Set(this.app.vault.getFiles().map((file) => key(file.path)));
+		if (except) taken.delete(key(except));
+		const isTaken = (candidate: string): boolean => taken.has(key(candidate));
 
 		if (!isTaken(normalised)) return normalised;
 

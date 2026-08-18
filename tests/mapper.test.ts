@@ -685,7 +685,94 @@ describe("body and checklist", () => {
 			content: "",
 			items: [{ title: "one", completed: false }],
 			privateBody: "",
+			completions: [],
 		});
+	});
+});
+
+/**
+ * The completion log of a repeating task that recurs too often to earn a note
+ * per occurrence. It lives inside the synced region so it round-trips, but out
+ * of the description so the history is never pushed into TickTick's own.
+ */
+describe("the completion log", () => {
+	const log = ["- 2026-08-18", "- 2026-08-17"];
+
+	it("writes the log under its own heading", () => {
+		const body = buildBody("Water them", [], { completions: log });
+		expect(body).toBe("Water them\n\n## Completions\n\n- 2026-08-18\n- 2026-08-17\n");
+	});
+
+	it("omits the heading when there is nothing logged", () => {
+		expect(buildBody("Water them", [], { completions: [] })).toBe("Water them\n");
+	});
+
+	it("round-trips through the note unchanged", () => {
+		const body = buildBody("Water them", [{ title: "one", completed: true }], {
+			completions: log,
+		});
+		expect(splitBody(body)).toEqual({
+			content: "Water them",
+			items: [{ title: "one", completed: true }],
+			privateBody: "",
+			completions: log,
+		});
+	});
+
+	// The whole point of a separate section: the log is vault-side history, and
+	// folding it into the description would push it all to TickTick.
+	it("stays out of the description", () => {
+		const body = buildBody("Water them", [], { completions: log });
+		const parsed = noteToTask({ frontmatter: {}, body }, "Water the plants", options);
+		expect(parsed.content).toBe("Water them");
+		expect(parsed.completions).toEqual(log);
+	});
+
+	it("is put back on an ordinary write, which knows nothing about it", () => {
+		const body = buildBody("Water them", [], { completions: log });
+		const parsed = noteToTask({ frontmatter: {}, body }, "Water the plants", options);
+		const rewritten = taskToNote(task({ content: "A new description" }), options, {
+			completions: parsed.completions,
+		});
+
+		expect(rewritten.body).toContain("- 2026-08-18");
+		expect(rewritten.body).toContain("A new description");
+	});
+
+	it("keeps subtasks and completions apart whichever order they are written in", () => {
+		const body = [
+			"Water them",
+			"",
+			"## Completions",
+			"",
+			"- 2026-08-18",
+			"",
+			"## Subtasks",
+			"",
+			"- [x] one",
+		].join("\n");
+
+		expect(splitBody(body)).toEqual({
+			content: "Water them",
+			items: [{ title: "one", completed: true }],
+			privateBody: "",
+			completions: ["- 2026-08-18"],
+		});
+	});
+
+	it("does not read the log as a subtask, or a subtask as a log line", () => {
+		const body = buildBody("", [{ title: "one", completed: false }], { completions: log });
+		const parsed = splitBody(body);
+		expect(parsed.items).toEqual([{ title: "one", completed: false }]);
+		expect(parsed.completions).toEqual(log);
+	});
+
+	it("leaves the log alone when the marker puts it below the boundary", () => {
+		const marker = "<!-- ticktick:end -->";
+		const body = ["Water them", "", marker, "", "## Completions", "", "- 2026-08-18"].join("\n");
+		const parsed = splitBody(body, marker);
+		expect(parsed.completions).toEqual([]);
+		expect(parsed.privateBody).toContain("- 2026-08-18");
 	});
 });
 

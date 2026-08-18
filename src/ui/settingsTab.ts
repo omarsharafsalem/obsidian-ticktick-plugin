@@ -491,6 +491,57 @@ export class TickTickSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(root)
+			.setName("Repeating tasks: note per occurrence from")
+			.setDesc(
+				"Finishing a repeating task rolls the task forward and files a separate record for the " +
+					"occurrence you finished. Occurrences at least this many days apart get a note each; " +
+					"anything more frequent is logged under a Completions heading in the task's own note, " +
+					"so a daily habit does not fill the vault. 7 means weekly and rarer get notes.",
+			)
+			.addText((text) =>
+				text.setValue(String(settings.recurrence.thresholdDays)).onChange(async (value) => {
+					const days = Number.parseFloat(value);
+					if (Number.isFinite(days) && days >= 0) {
+						settings.recurrence.thresholdDays = days;
+						await this.plugin.saveSettings();
+					}
+				}),
+			);
+
+		new Setting(root)
+			.setName("Override that rule with the property")
+			.setDesc(
+				"Set this property on a repeating task's note to 'note' or 'log' to decide for that task " +
+					"alone. Anything else is ignored and the rule above applies. Never written by the " +
+					"plugin — it is yours to set and yours to remove.",
+			)
+			.addText((text) =>
+				text.setValue(settings.recurrence.overrideProperty).onChange(async (value) => {
+					settings.recurrence.overrideProperty = value.trim();
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(root)
+			.setName("Stop after this many occurrence notes")
+			.setDesc(
+				"The completed list reaches back 90 days, so the first sync of a task that repeats " +
+					"often would create a note per occurrence at once. Past this count the rest are left " +
+					"for later syncs. 0 removes the limit.",
+			)
+			.addText((text) =>
+				text
+					.setValue(String(settings.recurrence.maxOccurrenceNotesPerSync))
+					.onChange(async (value) => {
+						const limit = Number.parseInt(value, 10);
+						if (Number.isFinite(limit) && limit >= 0) {
+							settings.recurrence.maxOccurrenceNotesPerSync = limit;
+							await this.plugin.saveSettings();
+						}
+					}),
+			);
+
+		new Setting(root)
 			.setName("Completed tasks")
 			.setDesc("What to do with a note once its task is completed.")
 			.addDropdown((dropdown) =>
