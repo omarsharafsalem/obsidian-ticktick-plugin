@@ -46,6 +46,8 @@ const PROPERTY_LABELS: Record<keyof PropertyNames, string> = {
 	id: "Task ID",
 	project: "List",
 	subproject: "Sub-project",
+	sessionsDone: "Sessions done",
+	lastSession: "Last session",
 	title: "Title override",
 	status: "Status",
 	priority: "Priority",

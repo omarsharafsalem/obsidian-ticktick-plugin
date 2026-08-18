@@ -328,3 +328,41 @@ describe("a task that is also another kind of note", () => {
 		expect(fm).not.toHaveProperty("note_type");
 	});
 });
+
+// Attendance, on the only notes where it means anything.
+describe("counting completed repetitions", () => {
+	const P4 = DEFAULT_PROPERTIES;
+	const repeating = () =>
+		({ ...blankTask("p1"), id: "t1", title: "Arabic — today's study",
+		   repeatFlag: "RRULE:FREQ=DAILY" }) as Task;
+
+	it("counts the completion lines and takes the latest date", () => {
+		const fm = taskToNote(repeating(), undefined, {
+			completions: ["- 2026-08-16", "- 2026-08-18", "- 2026-08-17"],
+		}).frontmatter;
+		expect(fm[P4.sessionsDone]).toBe(3);
+		expect(fm[P4.lastSession]).toBe("2026-08-18");
+	});
+
+	// A one-off task completes once. `sessions_done: 1` is noise on every task
+	// in the vault, which is why this is gated on the task actually repeating.
+	it("writes nothing for a task that does not repeat", () => {
+		const once = { ...blankTask("p1"), id: "t1", title: "Buy milk" } as Task;
+		const fm = taskToNote(once, undefined, { completions: ["- 2026-08-16"] }).frontmatter;
+		expect(fm).not.toHaveProperty(P4.sessionsDone);
+		expect(fm).not.toHaveProperty(P4.lastSession);
+	});
+
+	it("writes nothing for a repeating task with no completions yet", () => {
+		const fm = taskToNote(repeating(), undefined, { completions: [] }).frontmatter;
+		expect(fm).not.toHaveProperty(P4.sessionsDone);
+	});
+
+	it("ignores a line that is not a date", () => {
+		const fm = taskToNote(repeating(), undefined, {
+			completions: ["- 2026-08-16", "- something written by hand"],
+		}).frontmatter;
+		expect(fm[P4.sessionsDone]).toBe(2);
+		expect(fm[P4.lastSession]).toBe("2026-08-16");
+	});
+});

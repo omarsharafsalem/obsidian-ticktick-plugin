@@ -538,6 +538,29 @@ export function taskToNote(
 		}
 	}
 
+	// A count of completed repetitions, and when the last one was.
+	//
+	// Gated on the task actually repeating, not on what kind of note it is: a
+	// one-off task completes once and `sessions_done: 1` is noise, while a
+	// repeating task's completion history is the only record of showing up.
+	// Deriving it from `repeatFlag` also keeps the plugin out of the vault's own
+	// vocabulary — it never has to know what a topic note is.
+	//
+	// The completion lines are the evidence and this is the index of them, for
+	// the same reason `completed` exists at all: nothing else can count them,
+	// because a property list cannot be read from a note's body.
+	const sessions = context.completions ?? [];
+	if (task.repeatFlag && sessions.length > 0) {
+		frontmatter[p.sessionsDone] = sessions.length;
+		// Lines are `- YYYY-MM-DD`, so the greatest string is the latest date.
+		const latest = sessions
+			.map((line) => line.replace(/^-\s*/, "").trim())
+			.filter((d) => /^\d{4}-\d{2}-\d{2}/.test(d))
+			.sort()
+			.at(-1);
+		if (latest) frontmatter[p.lastSession] = latest;
+	}
+
 	const marker = options.marker;
 	if (marker?.property.trim()) frontmatter[marker.property.trim()] = marker.value;
 

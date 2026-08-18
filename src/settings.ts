@@ -20,6 +20,10 @@ export interface PropertyNames {
 	project: string;
 	/** The sub-project — a section inside the list. */
 	subproject: string;
+	/** How many times a repeating task has been completed. */
+	sessionsDone: string;
+	/** When a repeating task was last completed. */
+	lastSession: string;
 	status: string;
 	priority: string;
 	due: string;
@@ -45,6 +49,8 @@ export const DEFAULT_PROPERTIES: PropertyNames = {
 	id: "ticktick_task_id",
 	project: "project",
 	subproject: "subproject",
+	sessionsDone: "sessions_done",
+	lastSession: "last_session",
 	status: "status",
 	title: "ticktick_title",
 	priority: "priority",
@@ -75,6 +81,8 @@ export const PROPERTY_TYPES: Partial<Record<keyof PropertyNames, string>> = {
 	priority: "multitext",
 	project: "multitext",
 	subproject: "multitext",
+	sessionsDone: "number",
+	lastSession: "date",
 	parent: "text",
 	children: "multitext",
 };
