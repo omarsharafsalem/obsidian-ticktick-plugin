@@ -5,6 +5,7 @@ import {
 	type ChecklistItem,
 	type NewTask,
 	type Project,
+	type ProjectKind,
 	type Task,
 	type TaskKind,
 	priorityFromWire,
@@ -96,6 +97,10 @@ function asKind(value: unknown): TaskKind | undefined {
 	return value === "TEXT" || value === "CHECKLIST" || value === "NOTE" ? value : undefined;
 }
 
+function asProjectKind(value: unknown): ProjectKind | undefined {
+	return value === "TASK" || value === "NOTE" ? value : undefined;
+}
+
 export function normaliseTask(raw: unknown): Task {
 	const task = (raw ?? {}) as Json;
 	const isAllDay = task["isAllDay"] === true;
@@ -141,7 +146,7 @@ export function normaliseProject(raw: unknown): Project {
 		color: asString(project["color"]),
 		closed: project["closed"] === true,
 		groupId: asString(project["groupId"]),
-		kind: asString(project["kind"]),
+		kind: asProjectKind(project["kind"]),
 	};
 }
 

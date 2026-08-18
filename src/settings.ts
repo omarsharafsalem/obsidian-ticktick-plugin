@@ -1,4 +1,4 @@
-import type { Priority, SyncedField, TaskStatus } from "./api/types";
+import type { Priority, Project, ProjectKind, SyncedField, TaskStatus } from "./api/types";
 import type {
 	ConflictPolicy,
 	DeleteConflictPolicy,
@@ -168,6 +168,37 @@ export const DEFAULT_FIELD_MODES: FieldModes = {
 
 export type CompletedHandling = "keep" | "archive" | "delete";
 
+/**
+ * Where one kind of TickTick list is filed, and what its notes call themselves.
+ *
+ * A vault usually already has somewhere for notes and somewhere for tasks, and
+ * a property saying which is which. TickTick already knows the difference — it
+ * reports each list as a task list or a notes list — so this is the join
+ * between the two, rather than a rule the user has to maintain by hand.
+ *
+ * Both fields are empty by default, meaning "carry on as before": the ordinary
+ * task folder, and the marker value already configured. Nothing here invents a
+ * folder or a vocabulary for anybody.
+ */
+export interface KindRouting {
+	/** Folder for this kind's notes. Empty means {@link TickTickSyncSettings.taskFolder}. */
+	folder: string;
+	/**
+	 * What this kind's notes write into the marker property — `note_type`, or
+	 * whatever it has been renamed to.
+	 *
+	 * A free string, and it is compared and written verbatim: a vault whose
+	 * values read "📌 task" and "💭 thought" means those exactly, emoji
+	 * included. Empty means the marker's own value, so a task list is unchanged.
+	 */
+	noteType: string;
+}
+
+export const DEFAULT_LIST_KINDS: Record<ProjectKind, KindRouting> = {
+	TASK: { folder: "", noteType: "" },
+	NOTE: { folder: "", noteType: "" },
+};
+
 export interface AuthSettings {
 	/**
 	 * A token created in TickTick under Settings > Account > API Token.
@@ -211,6 +242,16 @@ export interface TickTickSyncSettings {
 	syncOnStartup: boolean;
 	/** Empty means every project. */
 	projectFilter: string[];
+
+	/**
+	 * Where each kind of list is filed, and what its notes call themselves.
+	 *
+	 * TickTick lists come in two kinds, and a notes list is not a to-do list —
+	 * but it is still worth having in the vault, filed where notes go rather
+	 * than among the tasks. Both entries are empty by default, which routes
+	 * every list exactly as before.
+	 */
+	listKinds: Record<ProjectKind, KindRouting>;
 
 	/**
 	 * Where a note goes when its task is deleted in TickTick.
@@ -368,6 +409,7 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	syncIntervalMinutes: 5,
 	syncOnStartup: true,
 	projectFilter: [],
+	listKinds: { TASK: { ...DEFAULT_LIST_KINDS.TASK }, NOTE: { ...DEFAULT_LIST_KINDS.NOTE } },
 	listFolders: {},
 	listPages: {},
 	deletedTaskFolder: "🗄️ Archive",
@@ -399,6 +441,50 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	archiveFolder: "Tasks/Archive",
 	debugLogging: false,
 };
+
+/**
+ * Why a list is not being synced, in words worth showing someone.
+ *
+ * One function rather than a filter in the engine and a label in the settings
+ * tab, because the two drifting apart is how a list ends up silently skipped —
+ * which is its own bug. The engine skips exactly the lists this explains, and
+ * the settings tab explains exactly the lists the engine skips.
+ */
+export function listSkipReason(
+	project: Project,
+	settings: TickTickSyncSettings,
+): string | undefined {
+	if (settings.projectFilter.length > 0 && !settings.projectFilter.includes(project.id)) {
+		return "Not one of the lists selected below, so nothing in it is read or written.";
+	}
+
+	if (project.closed) {
+		return (
+			"Archived in TickTick, which stops it returning any tasks. Notes already synced from it " +
+			"are left exactly as they are — an archived list is not a deleted one."
+		);
+	}
+
+	return undefined;
+}
+
+/**
+ * How a list of this kind is filed, with the fallbacks applied.
+ *
+ * An unreported kind is treated as a task list: TickTick omits the field on
+ * some lists, and guessing "notes" on a missing value would file real tasks
+ * somewhere they were never meant to go.
+ */
+export function routingForKind(
+	kind: ProjectKind | undefined,
+	settings: TickTickSyncSettings,
+): { folder: string; noteType: string } {
+	const routing = settings.listKinds[kind ?? "TASK"] ?? DEFAULT_LIST_KINDS.TASK;
+	return {
+		folder: routing.folder.trim() || settings.taskFolder,
+		noteType: routing.noteType.trim() || settings.taskMarker.value,
+	};
+}
 
 export function fieldAllowsPush(mode: FieldSyncMode): boolean {
 	return mode === "both" || mode === "toTickTick";
@@ -437,6 +523,10 @@ export function mergeSettings(stored: unknown): TickTickSyncSettings {
 		fieldModes: { ...DEFAULT_FIELD_MODES, ...(raw.fieldModes ?? {}) },
 		listFolders: { ...(raw.listFolders ?? {}) },
 		listPages: { ...(raw.listPages ?? {}) },
+		listKinds: {
+			TASK: { ...DEFAULT_LIST_KINDS.TASK, ...(raw.listKinds?.TASK ?? {}) },
+			NOTE: { ...DEFAULT_LIST_KINDS.NOTE, ...(raw.listKinds?.NOTE ?? {}) },
+		},
 		hiddenProperties: [...(raw.hiddenProperties ?? DEFAULT_SETTINGS.hiddenProperties)],
 		taskMarker: { ...DEFAULT_SETTINGS.taskMarker, ...(raw.taskMarker ?? {}) },
 		labels: {

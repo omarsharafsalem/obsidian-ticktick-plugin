@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normaliseTask, serialiseTask } from "../src/api/openApi";
+import { normaliseProject, normaliseTask, serialiseTask } from "../src/api/openApi";
 
 /**
  * TickTick returns both `content` and `desc` on every task, and the task's
@@ -62,6 +62,35 @@ describe("content and desc", () => {
 	it("falls back to content when the kind is absent", () => {
 		const task = normaliseTask({ id: "t1", content: "the body" });
 		expect(task.content).toBe("the body");
+	});
+});
+
+/**
+ * Both fields come straight off a real account: three of the user's lists are
+ * notes lists, and any list can be archived. Neither was being read, so a notes
+ * list synced as if it were full of tasks and an archived one looked like a
+ * list whose every task had just been deleted.
+ */
+describe("lists", () => {
+	it("reads the kind so a notes list can be told from a task list", () => {
+		expect(normaliseProject({ id: "p1", name: "Career Notes", kind: "NOTE" }).kind).toBe("NOTE");
+		expect(normaliseProject({ id: "p2", name: "Errands", kind: "TASK" }).kind).toBe("TASK");
+	});
+
+	it("leaves an unrecognised kind unset rather than guessing", () => {
+		expect(normaliseProject({ id: "p1", name: "Odd", kind: "SOMETHING_NEW" }).kind).toBeUndefined();
+		expect(normaliseProject({ id: "p1", name: "Odd" }).kind).toBeUndefined();
+	});
+
+	it("reads whether a list is archived", () => {
+		expect(normaliseProject({ id: "p1", name: "Old project", closed: true }).closed).toBe(true);
+		expect(normaliseProject({ id: "p2", name: "Live project", closed: false }).closed).toBe(false);
+	});
+
+	// TickTick omits `closed` on an ordinary list, and an absent flag must not
+	// read as archived — that would skip every list the account has.
+	it("treats a missing archived flag as not archived", () => {
+		expect(normaliseProject({ id: "p1", name: "Errands" }).closed).toBe(false);
 	});
 });
 

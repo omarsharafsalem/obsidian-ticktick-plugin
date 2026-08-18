@@ -1,7 +1,7 @@
 import type { TFile } from "obsidian";
 import type { TickTickClient } from "../api/client";
-import { blankTask, type NewTask, type Project, type Task } from "../api/types";
-import type { TickTickSyncSettings } from "../settings";
+import { blankTask, type NewTask, type Project, type ProjectKind, type Task } from "../api/types";
+import { listSkipReason, routingForKind, type TickTickSyncSettings } from "../settings";
 import { NoteRepository, parentFolder, taskNotePath } from "../vault/notes";
 import { applyFieldModes } from "./fieldModes";
 import {
@@ -121,6 +121,12 @@ export class SyncEngine {
 	/** Real project ids that stand for a project listed under a reserved id. */
 	private inboxAliases = new Map<string, string>();
 
+	/**
+	 * What kind of list each task belongs to, which decides where its note is
+	 * filed and what the note calls itself. Rebuilt each pass, like the links.
+	 */
+	private projectKinds = new Map<string, ProjectKind>();
+
 	/** Report what would change and write nothing. Set for the run's duration. */
 	private dryRun = false;
 
@@ -149,16 +155,28 @@ export class SyncEngine {
 
 		try {
 			const projects = await this.loadProjects();
-			const projectNames = new Map(projects.map((p) => [p.id, p.name]));
+			// Names for every list, including the skipped ones: a note whose list is
+			// not being synced still has to resolve to that list rather than to
+			// nothing, or it looks like a note with no list at all.
+			const projectNames = new Map(projects.all.map((p) => [p.id, p.name]));
+			const syncedProjects = new Set(projects.synced.map((p) => p.id));
+			this.projectKinds = new Map(
+				projects.all.filter((p) => p.kind).map((p) => [p.id, p.kind as ProjectKind]),
+			);
 			this.inboxAliases.clear();
 			this.completedFetched = false;
-			const remote = await this.loadRemoteTasks(projects, report);
+			const remote = await this.loadRemoteTasks(projects.synced, report);
 
 			// Fold in any real id discovered while reading tasks, so a task in the
-			// Inbox resolves to its name and to any folder mapped for it.
+			// Inbox resolves to its name and to any folder mapped for it — and, just
+			// as importantly, counts as a list that *was* read this pass.
 			for (const [realId, listedId] of this.inboxAliases) {
 				const name = projectNames.get(listedId);
 				if (name && !projectNames.has(realId)) projectNames.set(realId, name);
+				if (syncedProjects.has(listedId)) syncedProjects.add(realId);
+
+				const kind = this.projectKinds.get(listedId);
+				if (kind && !this.projectKinds.has(realId)) this.projectKinds.set(realId, kind);
 			}
 			this.links = this.buildLinkIndex(remote, projectNames);
 			const local = await this.loadLocalNotes(report, projectNames);
@@ -174,9 +192,9 @@ export class SyncEngine {
 				local,
 				projectNames,
 				report,
-				syncedProjects: new Set(projectNames.keys()),
+				syncedProjects,
 			});
-			await this.createUnlinkedNotes(local, remote, projectNames, report);
+			await this.createUnlinkedNotes(local, remote, syncedProjects, report);
 
 			this.deps.store.markSynced();
 			await this.deps.persist();
@@ -192,11 +210,30 @@ export class SyncEngine {
 
 	// --- Loading ------------------------------------------------------------
 
-	private async loadProjects(): Promise<Project[]> {
+	/**
+	 * The account's lists, split into the ones this pass will read and the rest.
+	 *
+	 * Both halves are needed, and for opposite reasons. The synced half decides
+	 * what is fetched; the whole set is what lets a note belonging to a skipped
+	 * list still be recognised as belonging to *a* list. Without that, an
+	 * archived list's notes look listless, and a task missing from a fetch that
+	 * was never made reads as a task that was deleted.
+	 */
+	private async loadProjects(): Promise<{ all: Project[]; synced: Project[] }> {
 		const all = await this.deps.client.listProjects();
-		const filter = this.deps.settings.projectFilter;
-		const selected = filter.length === 0 ? all : all.filter((p) => filter.includes(p.id));
-		return selected.filter((project) => !project.closed);
+		const skipped = new Map<string, string>();
+
+		const synced = all.filter((project) => {
+			const reason = listSkipReason(project, this.deps.settings);
+			if (reason) skipped.set(project.name, reason);
+			return !reason;
+		});
+
+		if (skipped.size > 0) {
+			this.deps.log("Lists not being synced", Object.fromEntries(skipped));
+		}
+
+		return { all, synced };
 	}
 
 	private async loadRemoteTasks(
@@ -547,12 +584,20 @@ export class SyncEngine {
 
 		// A task belonging to a list that was not synced was never looked for, so
 		// its absence says nothing at all. Without this, narrowing the lists to
-		// sync archives every note belonging to the lists left out.
-		if (!remoteRecord && entry?.projectId && !syncedProjects.has(entry.projectId)) {
+		// sync archives every note belonging to the lists left out — and so does
+		// archiving a list in TickTick, which stops it returning any tasks.
+		//
+		// The note's own list counts as well as the recorded one. They usually
+		// agree, but the sync state is cleared by a reset and by a version bump,
+		// and a note whose list was archived in the meantime would otherwise reach
+		// reconcile with no base, no task, and an id proving it was linked once —
+		// which reads as "the task was deleted" and archives the note.
+		const listOf = entry?.projectId || localNote?.snapshot.projectId;
+		if (!remoteRecord && listOf && !syncedProjects.has(listOf)) {
 			this.deps.log("Task belongs to a list that is not being synced; leaving it alone", {
 				taskId,
-				projectId: entry.projectId,
-				notePath: entry.notePath,
+				projectId: listOf,
+				notePath: entry?.notePath ?? localNote?.file.path,
 			});
 			return;
 		}
@@ -858,14 +903,24 @@ export class SyncEngine {
 	private async createUnlinkedNotes(
 		local: LocalNote[],
 		remote: Map<string, RemoteRecord>,
-		projectNames: Map<string, string>,
+		syncedProjects: Set<string>,
 		report: SyncReport,
 	): Promise<void> {
 		const { client, store, settings } = this.deps;
-		const inbox = settings.projectFilter[0] ?? [...projectNames.keys()][0];
+		// Where a note carrying no list of its own goes. A selected list wins,
+		// unless it is one this pass is not reading — a task cannot be created in
+		// a list that was skipped.
+		const preferred = settings.projectFilter[0];
+		const inbox = preferred && syncedProjects.has(preferred) ? preferred : [...syncedProjects][0];
+
+		// A note naming a list this pass did not read is not a new task there. The
+		// list may be archived, or a notes list, or simply not selected — none of
+		// which is an instruction to put a task into it.
+		const inASkippedList = (note: LocalNote): boolean =>
+			Boolean(note.snapshot.projectId) && !syncedProjects.has(note.snapshot.projectId);
 
 		const candidates = local.filter(
-			(note) => !note.taskId && !store.getByPath(note.file.path),
+			(note) => !note.taskId && !store.getByPath(note.file.path) && !inASkippedList(note),
 		);
 
 		// Tasks in TickTick that no note claims. A note about to be "created" that
@@ -905,6 +960,13 @@ export class SyncEngine {
 			// Skip anything the store already knows by path — it is mid-link.
 			if (store.getByPath(note.file.path)) {
 				this.deps.log("Not creating a task: already tracked by path", note.file.path);
+				continue;
+			}
+			if (inASkippedList(note)) {
+				this.deps.log("Not creating a task: its list is not being synced", {
+					note: note.file.path,
+					projectId: note.snapshot.projectId,
+				});
 				continue;
 			}
 
@@ -1069,7 +1131,13 @@ export class SyncEngine {
 				properties: settings.properties,
 				inlineTags: settings.inlineTags,
 				labels: settings.labels,
-				marker: settings.taskMarker,
+				// The marker property is the note's own account of what it is, so a
+				// note from a notes list says so there rather than claiming to be a
+				// task. Same property, different value — one vocabulary, not two.
+				marker: {
+					property: settings.taskMarker.property,
+					value: this.routingFor(task.projectId).noteType,
+				},
 				syncedRegionMarker: settings.syncedRegionMarker,
 				useTaskTimeZone: settings.showTimesIn === "task",
 			},
@@ -1081,8 +1149,10 @@ export class SyncEngine {
 	 * Where a task's note belongs.
 	 *
 	 * An explicit per-list folder wins over everything, so one list can live
-	 * inside an existing project folder while the rest stay together. Archiving
-	 * a completed task still overrides both.
+	 * inside an existing project folder while the rest stay together. Failing
+	 * that, the folder set for this kind of list — a notes list belongs with the
+	 * vault's notes, not among its tasks. Archiving a completed task still
+	 * overrides both.
 	 */
 	private folderFor(task: Task): string {
 		const { settings } = this.deps;
@@ -1091,7 +1161,12 @@ export class SyncEngine {
 			return settings.archiveFolder;
 		}
 
-		return settings.listFolders[task.projectId]?.trim() || settings.taskFolder;
+		return settings.listFolders[task.projectId]?.trim() || this.routingFor(task.projectId).folder;
+	}
+
+	/** The folder and note type this task's list has been routed to. */
+	private routingFor(projectId: string): { folder: string; noteType: string } {
+		return routingForKind(this.projectKinds.get(projectId), this.deps.settings);
 	}
 
 	private toNewTask(snapshot: TaskSnapshot, projectId: string): NewTask {
@@ -1180,6 +1255,12 @@ function projectPageLink(page: string | undefined): TaskLink | undefined {
  * The property is typically list-typed in a real vault — `note_type: [task]` —
  * so a single value and a list of values both count, and the comparison ignores
  * case since it is hand-entered.
+ *
+ * Only the marker's own value counts, never the values other list kinds are
+ * routed to. A vault that files notes as "💭 thought" is full of thoughts that
+ * were never tasks, and matching those would push every one of them to
+ * TickTick as a new task. Notes this plugin wrote keep their task id, which is
+ * what keeps them recognised whatever their note type says.
  */
 function matchesMarker(
 	frontmatter: Record<string, unknown> | undefined,

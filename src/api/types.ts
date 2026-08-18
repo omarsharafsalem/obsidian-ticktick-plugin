@@ -16,6 +16,14 @@ export type TaskStatus = "todo" | "completed" | "abandoned";
  */
 export type TaskKind = "TEXT" | "CHECKLIST" | "NOTE";
 
+/**
+ * What a list holds. TickTick offers two kinds when a list is created, and a
+ * notes list is not a to-do list — which is worth knowing, because a vault
+ * usually already has somewhere its notes go and somewhere its tasks go. The
+ * kind is what tells the two apart without anyone maintaining a rule by hand.
+ */
+export type ProjectKind = "TASK" | "NOTE";
+
 export interface ChecklistItem {
 	/** Present for items that already exist remotely. */
 	id?: string;
@@ -90,9 +98,16 @@ export interface Project {
 	id: string;
 	name: string;
 	color?: string;
+	/**
+	 * Archived in TickTick.
+	 *
+	 * An archived list stops returning its tasks, which is indistinguishable from
+	 * every one of them having been deleted — so this has to be read, and read
+	 * before anything concludes anything from a task's absence.
+	 */
 	closed: boolean;
 	groupId?: string;
-	kind?: string;
+	kind?: ProjectKind;
 }
 
 /** The subset of {@link Task} that participates in field-level merging. */

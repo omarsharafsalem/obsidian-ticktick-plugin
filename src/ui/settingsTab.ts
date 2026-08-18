@@ -4,11 +4,17 @@ import {
 	SYNCED_FIELDS,
 	type Priority,
 	type Project,
+	type ProjectKind,
 	type SyncedField,
 	type TaskStatus,
 } from "../api/types";
 import { awaitLoopbackCode, exchangeAuthCode, extractAuthCode, randomState } from "../auth/oauth";
-import { DEFAULT_PROPERTIES, type FieldSyncMode, type PropertyNames } from "../settings";
+import {
+	DEFAULT_PROPERTIES,
+	listSkipReason,
+	type FieldSyncMode,
+	type PropertyNames,
+} from "../settings";
 import { emptyState, SyncStore } from "../sync/state";
 import { PasteCodeModal, PlannedChangesModal } from "./authModal";
 
@@ -26,6 +32,11 @@ const FIELD_LABELS: Record<SyncedField, string> = {
 	items: "Subtasks",
 	projectId: "List",
 	parentId: "Parent task",
+};
+
+const KIND_LABELS: Record<ProjectKind, string> = {
+	TASK: "Task lists",
+	NOTE: "Notes lists",
 };
 
 const PROPERTY_LABELS: Record<keyof PropertyNames, string> = {
@@ -544,6 +555,8 @@ export class TickTickSettingTab extends PluginSettingTab {
 				? "Every list is synced. Select one or more to narrow it — worth doing while testing, so only a spare list is touched."
 				: `Syncing ${settings.projectFilter.length} of your lists. Everything else is ignored.`;
 
+		this.renderListKinds(root);
+
 		const setting = new Setting(root).setName("Lists to sync").setDesc(summarise());
 
 		setting.addButton((button) =>
@@ -588,11 +601,29 @@ export class TickTickSettingTab extends PluginSettingTab {
 			return;
 		}
 
+		// Whether a list is selected is already visible on its own toggle, so the
+		// only reason worth spelling out is the one nothing else on this page
+		// shows. Computed from the same function the engine filters on, so the two
+		// cannot end up describing different lists.
+		const reasonFor = (project: Project): string | undefined =>
+			listSkipReason(project, { ...settings, projectFilter: [] });
+
+		const skipped = this.projects.filter((project) => reasonFor(project));
+		if (skipped.length > 0) {
+			root.createEl("p", {
+				cls: "setting-item-description",
+				text: `Not synced: ${skipped.map((project) => project.name).join(", ")}. Each says why below.`,
+			});
+		}
+
 		for (const project of this.projects) {
+			const reason = reasonFor(project);
+
 			new Setting(root)
-				.setName(project.name)
+				.setName(reason ? `${project.name} — not synced` : project.name)
 				.setDesc(
-					(project.closed ? "Archived in TickTick. " : "") +
+					(reason ? `${reason} ` : "") +
+						(project.kind === "NOTE" ? "A notes list, filed as set above. " : "") +
 						"Folder for this list's notes, and the note that represents the project. " +
 						"Set a project note and the list property becomes a link to it, so every task " +
 						"appears in that note's backlinks. Both are optional.",
@@ -626,6 +657,58 @@ export class TickTickSettingTab extends PluginSettingTab {
 						setting.setDesc(summarise());
 					}),
 				);
+		}
+	}
+
+	/**
+	 * Routes a list by the kind TickTick already reports it as.
+	 *
+	 * A vault that tracks tasks usually already has a folder for notes, a folder
+	 * for tasks and a property saying which a note is — so rather than making
+	 * that a rule to maintain by hand, this joins it to what the account already
+	 * knows. Left blank, every list is filed exactly as before.
+	 */
+	private renderListKinds(root: HTMLElement): void {
+		const { settings } = this.plugin;
+		const marker = settings.taskMarker.property.trim();
+
+		root.createEl("p", {
+			cls: "setting-item-description",
+			text:
+				"TickTick marks each list as a task list or a notes list. Leave a row blank to file that " +
+				"kind as before — the task folder, and the marker value from the Sync tab. " +
+				(marker
+					? `The note type is written to "${marker}" exactly as typed, so a value carrying an ` +
+						"emoji keeps it."
+					: "Set the task marker property on the Sync tab first — without one there is nowhere " +
+						"to write the note type."),
+		});
+
+		for (const kind of ["TASK", "NOTE"] as ProjectKind[]) {
+			new Setting(root)
+				.setName(KIND_LABELS[kind])
+				.setDesc(
+					kind === "NOTE"
+						? "Where notes lists are filed, and what their notes call themselves — e.g. a notes " +
+							"folder and 💭 thought."
+						: "Where ordinary task lists are filed, and what their notes call themselves.",
+				)
+				.addText((text) => {
+					text.setPlaceholder(`Folder, default ${settings.taskFolder}`);
+					text.setValue(settings.listKinds[kind].folder).onChange(async (value) => {
+						settings.listKinds[kind].folder = value.trim();
+						await this.plugin.saveSettings();
+					});
+				})
+				.addText((text) => {
+					text.setPlaceholder(`Note type, default ${settings.taskMarker.value}`);
+					// Not trimmed to a word or lowercased: "📌 task" is the value, emoji
+					// and space included, and altering it would stop matching the vault.
+					text.setValue(settings.listKinds[kind].noteType).onChange(async (value) => {
+						settings.listKinds[kind].noteType = value.trim();
+						await this.plugin.saveSettings();
+					});
+				});
 		}
 	}
 

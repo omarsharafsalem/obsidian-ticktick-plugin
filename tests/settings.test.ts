@@ -44,4 +44,23 @@ describe("migrating stored settings", () => {
 		const merged = mergeSettings({ labels: { statusNeutral: "📦 Archived" } } as never);
 		expect(merged.labels.statusNeutral).toEqual(["📦 Archived"]);
 	});
+
+	// Settings saved before lists were routed by kind have no entry at all, and
+	// an absent one has to mean "as before" rather than an undefined folder.
+	it("fills in list routing that was never stored", () => {
+		const merged = mergeSettings({ taskFolder: "Tasks" });
+		expect(merged.listKinds).toEqual({
+			TASK: { folder: "", noteType: "" },
+			NOTE: { folder: "", noteType: "" },
+		});
+	});
+
+	it("keeps a routing that is already stored, emoji and all", () => {
+		const merged = mergeSettings({
+			listKinds: { NOTE: { folder: "🧠 Notes", noteType: "💭 thought" } },
+		} as never);
+
+		expect(merged.listKinds.NOTE).toEqual({ folder: "🧠 Notes", noteType: "💭 thought" });
+		expect(merged.listKinds.TASK).toEqual({ folder: "", noteType: "" });
+	});
 });
