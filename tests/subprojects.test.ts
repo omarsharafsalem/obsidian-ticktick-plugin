@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { normaliseSection, normaliseTask, serialiseTask } from "../src/api/openApi";
 import { blankTask, type Task } from "../src/api/types";
-import { DEFAULT_PROPERTIES } from "../src/settings";
+import { DEFAULT_PROPERTIES, DEFAULT_SETTINGS } from "../src/settings";
 import { DEFAULT_MAPPER_OPTIONS, noteToTask, taskToNote } from "../src/sync/mapper";
+import { folderForTask } from "../src/sync/engine";
 
 const P = DEFAULT_PROPERTIES;
 
@@ -189,5 +190,32 @@ describe("a note whose filename is not its title", () => {
 		}).frontmatter;
 		// Not rewritten at all — which is what leaves the user's list intact.
 		expect(fm).not.toHaveProperty("aliases");
+	});
+});
+
+// One TickTick list holding work for several projects. The property alone is not
+// enough: a project's `.base` gathers with file.inFolder(...), so the note has to
+// land inside the project folder or its own views will not see it.
+describe("a list shared by several projects", () => {
+	const base = { ...DEFAULT_SETTINGS };
+
+	it("sends a section's notes to that section's folder, over the list's", () => {
+		const settings = {
+			...base,
+			listFolders: { list1: "Tasks/Shared", sect1: "🚀 Projects/Alpha/🗂️ Working Folders/✅ Tasks" },
+		};
+		expect(folderForTask({ projectId: "list1", columnId: "sect1" }, settings)).toBe(
+			"🚀 Projects/Alpha/🗂️ Working Folders/✅ Tasks",
+		);
+	});
+
+	it("falls back to the list's folder for a task in no section", () => {
+		const settings = { ...base, listFolders: { list1: "Tasks/Shared" } };
+		expect(folderForTask({ projectId: "list1" }, settings)).toBe("Tasks/Shared");
+	});
+
+	it("falls back to the list's folder for a section with none of its own", () => {
+		const settings = { ...base, listFolders: { list1: "Tasks/Shared" } };
+		expect(folderForTask({ projectId: "list1", columnId: "sect9" }, settings)).toBe("Tasks/Shared");
 	});
 });

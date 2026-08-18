@@ -822,18 +822,40 @@ export class TickTickSettingTab extends PluginSettingTab {
 					.setClass("ticktick-subproject-row")
 					.setName(`↳ ${section.name}`)
 					.setDesc(
-						"A section of this list, treated as a sub-project. Name the note for it and " +
-							"the sub-project property becomes a link, so its tasks show up in that " +
-							"note's backlinks.",
+						"A section of this list. Normally a sub-project — part of the work the list " +
+							"stands for. Switch it to its own project when the list is a shared " +
+							"container holding several unrelated projects, a section each. Give it a " +
+							"folder too: a project's base gathers by folder, so the note has to land " +
+							"inside the project for its views to see it.",
 					)
 					.addText((text) => {
-						text.setPlaceholder("Sub-project note");
+						text.setPlaceholder("Folder for this section's notes");
+						text.setValue(settings.listFolders[section.id] ?? "").onChange(async (value) => {
+							const folder = value.trim();
+							if (folder) settings.listFolders[section.id] = folder;
+							else delete settings.listFolders[section.id];
+							await this.plugin.saveSettings();
+						});
+					})
+					.addText((text) => {
+						text.setPlaceholder("Note for this section");
 						text.setValue(settings.listPages[section.id] ?? "").onChange(async (value) => {
 							const page = value.trim();
 							if (page) settings.listPages[section.id] = page;
 							else delete settings.listPages[section.id];
 							await this.plugin.saveSettings();
 						});
+					})
+					.addDropdown((drop) => {
+						drop
+							.addOption("sub", "Sub-project")
+							.addOption("own", "Its own project")
+							.setValue(settings.sectionIsProject[section.id] ? "own" : "sub")
+							.onChange(async (value) => {
+								if (value === "own") settings.sectionIsProject[section.id] = true;
+								else delete settings.sectionIsProject[section.id];
+								await this.plugin.saveSettings();
+							});
 					});
 			}
 		}

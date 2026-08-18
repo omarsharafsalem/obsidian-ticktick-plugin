@@ -370,6 +370,20 @@ export interface TickTickSyncSettings {
 	listPages: Record<string, string>;
 
 	/**
+	 * Sections that stand for a project in their own right, keyed by section id.
+	 *
+	 * A section is normally a sub-project — a part of the work its list stands
+	 * for. But a list can also be a shared container holding several unrelated
+	 * projects, one section each, and then the section answers "which project"
+	 * and there is no sub-project to name.
+	 *
+	 * Pair it with a folder in {@link listFolders} for the same section: a
+	 * project's `.base` gathers its notes with `file.inFolder(...)`, so the
+	 * property alone would name the project without putting the note in its view.
+	 */
+	sectionIsProject: Record<string, boolean>;
+
+	/**
 	 * Most new TickTick tasks one sync may create before it stops.
 	 *
 	 * Creating a task is the only operation that multiplies: a note that fails to
@@ -494,6 +508,7 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	listKinds: { TASK: { ...DEFAULT_LIST_KINDS.TASK }, NOTE: { ...DEFAULT_LIST_KINDS.NOTE } },
 	listFolders: {},
 	listPages: {},
+	sectionIsProject: {},
 	deletedTaskFolder: "🗄️ Archive",
 	syncedRegionMarker: "<!-- ticktick:end -->",
 	linkBackToNote: true,

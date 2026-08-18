@@ -1664,9 +1664,17 @@ export class SyncEngine {
 				currentAliases: note?.aliases,
 				// A section named in settings gets a link, so the sub-project note
 				// gathers its work through backlinks exactly as a project note does.
-				subprojectLink: task.columnId
-					? projectPageLink(this.deps.settings.listPages[task.columnId])
-					: undefined,
+				//
+				// Unless the section *is* the project. One list can hold work for
+				// several projects — a shared list with a section each — and then the
+				// section answers "which project", leaving no sub-project to name.
+				...(task.columnId && this.deps.settings.sectionIsProject[task.columnId]
+					? { projectLink: projectPageLink(this.deps.settings.listPages[task.columnId]) }
+					: {
+							subprojectLink: task.columnId
+								? projectPageLink(this.deps.settings.listPages[task.columnId])
+								: undefined,
+						}),
 				...note,
 			},
 		);
@@ -1682,13 +1690,7 @@ export class SyncEngine {
 	 * overrides both.
 	 */
 	private folderFor(task: Task): string {
-		const { settings } = this.deps;
-
-		if (task.status === "completed" && settings.completedHandling === "archive") {
-			return settings.archiveFolder;
-		}
-
-		return settings.listFolders[task.projectId]?.trim() || this.routingFor(task.projectId).folder;
+		return folderForTask(task, this.deps.settings, this.projectKinds.get(task.projectId));
 	}
 
 	/** The folder and note type this task's list has been routed to. */
@@ -1841,6 +1843,32 @@ function readAliases(value: unknown): string[] | undefined {
 	if (!Array.isArray(value)) return undefined;
 	const list = value.filter((v): v is string => typeof v === "string" && v.trim() !== "");
 	return list.length > 0 ? list : undefined;
+}
+
+/**
+ * Where a task's note belongs.
+ *
+ * Pure, and exported, because the ordering here is policy rather than plumbing:
+ * a section's folder beats its list's, which is what lets one TickTick list hold
+ * work for several projects. A project's `.base` gathers its notes with
+ * `file.inFolder(...)`, so the folder is what decides which project owns a note —
+ * naming the project in a property would not put the note in the project's views.
+ *
+ * Archiving a completed task still overrides everything.
+ */
+export function folderForTask(
+	task: { projectId: string; columnId?: string; status?: Task["status"] },
+	settings: TickTickSyncSettings,
+	kind?: ProjectKind,
+): string {
+	if (task.status === "completed" && settings.completedHandling === "archive") {
+		return settings.archiveFolder;
+	}
+
+	const section = task.columnId ? settings.listFolders[task.columnId]?.trim() : "";
+	if (section) return section;
+
+	return settings.listFolders[task.projectId]?.trim() || routingForKind(kind, settings).folder;
 }
 
 export function matchOrphansToTasks(
