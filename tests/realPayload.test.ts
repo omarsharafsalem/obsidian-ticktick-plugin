@@ -92,3 +92,42 @@ describe("a real timed task from TickTick", () => {
 		);
 	});
 });
+
+describe("a task TickTick reclassified after we created it", () => {
+	// Found in live testing, 18 Aug. Fixture F2 was pushed with no `kind`, so its
+	// body went to `content`. Adding subtasks made TickTick call it CHECKLIST, and
+	// reading strictly by kind then took the empty `desc` as the body — the note's
+	// paragraph was replaced with nothing while the text sat in `content`.
+	const wire = {
+		id: "6a83d8828f08bb0249e2fa41",
+		projectId: "6a834af28f083a5cfcc695a2",
+		title: "F2 — every field set",
+		kind: "CHECKLIST",
+		content: "**Fixture F2.** Written by hand, not by the plugin.",
+		desc: null,
+		items: [{ id: "i1", title: "First item", status: 0 }],
+	};
+
+	it("keeps the body that is actually there", () => {
+		expect(normaliseTask(wire).content).toBe("**Fixture F2.** Written by hand, not by the plugin.");
+	});
+
+	it("does not also carry it as the spare field, which would duplicate it", () => {
+		expect(normaliseTask(wire).inactiveBody).toBe("");
+	});
+
+	it("still prefers desc when desc is the one with the text", () => {
+		const t = normaliseTask({ ...wire, content: "spare", desc: "the real body" });
+		expect(t.content).toBe("the real body");
+		expect(t.inactiveBody).toBe("spare");
+	});
+
+	it("sends a task with subtasks as a checklist, body in desc", () => {
+		const body = serialiseTask({
+			...normaliseTask({ ...wire, kind: null }),
+			items: [{ id: "i1", title: "First item", completed: false }],
+		} as never) as Record<string, unknown>;
+		expect(body["kind"]).toBe("CHECKLIST");
+		expect(body["desc"]).toBe("**Fixture F2.** Written by hand, not by the plugin.");
+	});
+});

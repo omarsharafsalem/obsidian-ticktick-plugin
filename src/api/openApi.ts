@@ -122,13 +122,24 @@ export function normaliseTask(raw: unknown): Task {
 	const rawDesc = asString(task["desc"]) ?? "";
 	const descIsBody = kind === "CHECKLIST";
 
+	const bodyField = descIsBody ? rawDesc : rawContent;
+	const spareField = descIsBody ? rawContent : rawDesc;
+
+	// A task created without a `kind` becomes CHECKLIST the moment it gains a
+	// subtask, and its body stays in the `content` it was written to. Read
+	// strictly by kind, the body field is then empty and the note's text is
+	// replaced with nothing — text the user wrote, silently deleted, while the
+	// real copy sits in the field we decided not to look at. So an empty body
+	// field never wins against a non-empty one: absence is not an instruction.
+	const reclassified = bodyField === "" && spareField !== "";
+
 	return {
 		id: asString(task["id"]) ?? "",
 		projectId: asString(task["projectId"]) ?? "",
 		title: asString(task["title"]) ?? "",
 		kind,
-		content: stripNoteLink(descIsBody ? rawDesc : rawContent),
-		inactiveBody: descIsBody ? rawContent : rawDesc,
+		content: stripNoteLink(reclassified ? spareField : bodyField),
+		inactiveBody: reclassified ? "" : spareField,
 		status: statusFromWire(task["status"]),
 		priority: priorityFromWire(task["priority"]),
 		tags: asArray(task["tags"]).filter((t): t is string => typeof t === "string"),
@@ -177,7 +188,12 @@ export function serialiseTask(task: NewTask & { id?: string }): Json {
 		? `${task.content ? `${task.content}\n\n` : ""}[Open in Obsidian](${task.noteUrl})`
 		: task.content;
 
-	if (task.kind === "CHECKLIST") {
+	// Subtasks make it a checklist whether or not it says so yet, and a checklist
+	// keeps its body in `desc`. Sending the body as `content` is what let the two
+	// sides disagree about which field holds it in the first place.
+	const kind = task.kind ?? (task.items.length > 0 ? "CHECKLIST" : undefined);
+
+	if (kind === "CHECKLIST") {
 		body["desc"] = described;
 		body["content"] = task.inactiveBody ?? "";
 	} else {
@@ -185,7 +201,7 @@ export function serialiseTask(task: NewTask & { id?: string }): Json {
 		if (task.inactiveBody) body["desc"] = task.inactiveBody;
 	}
 
-	if (task.kind) body["kind"] = task.kind;
+	if (kind) body["kind"] = kind;
 
 	if (task.id) body["id"] = task.id;
 	if (task.tags.length > 0) body["tags"] = task.tags;
