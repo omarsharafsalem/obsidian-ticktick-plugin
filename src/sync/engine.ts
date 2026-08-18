@@ -810,36 +810,26 @@ export class SyncEngine {
 	): Promise<void> {
 		const { store } = this.deps;
 
-		const orphans = local.filter((note) => {
-			if (note.taskId) return false;
+		const pairs = matchOrphansToTasks(
+			local.map((note) => ({
+				path: note.file.path,
+				taskId: note.taskId,
+				title: note.snapshot.title,
+				projectId: note.snapshot.projectId,
+				trackedTaskId: store.getByPath(note.file.path)?.taskId,
+			})),
+			[...remote.values()].map((record) => record.task),
+		);
 
-			// Being tracked by path only counts while the task it points at still
-			// exists. An entry left behind by a task that has since been deleted is
-			// stale, and must not stop the note being re-linked to a live one —
-			// otherwise a single dead entry strands the note permanently.
-			const tracked = store.getByPath(note.file.path);
-			return !tracked || !remote.has(tracked.taskId);
-		});
+		if (pairs.size === 0) return;
 
-		if (orphans.length === 0) return;
+		for (const note of local) {
+			const taskId = pairs.get(note.file.path);
+			if (!taskId) continue;
 
-		// Claimed by a note found this pass — not merely tracked. A task whose
-		// note has gone missing is precisely what needs adopting, so having a
-		// stored entry must not disqualify it.
-		const claimed = new Set(local.map((note) => note.taskId).filter(Boolean));
-		const available = new Map<string, Task>();
-		for (const { task } of remote.values()) {
-			if (claimed.has(task.id)) continue;
-			const key = `${task.projectId}::${task.title.trim().toLowerCase()}`;
-			if (!available.has(key)) available.set(key, task);
-		}
-
-		for (const note of orphans) {
-			const key = `${note.snapshot.projectId}::${note.snapshot.title.trim().toLowerCase()}`;
-			const twin = available.get(key);
+			const twin = remote.get(taskId)?.task;
 			if (!twin) continue;
 
-			available.delete(key);
 			if (this.dryRun) {
 				report.planned.push(`Re-link ${note.file.path} to its existing task "${twin.title}"`);
 				continue;
@@ -1207,4 +1197,67 @@ function matchesMarker(
 function describeError(error: unknown): string {
 	if (error instanceof Error) return error.message;
 	return String(error);
+}
+
+/** A note as the orphan matcher sees it — no vault types, no I/O. */
+export interface OrphanCandidate {
+	path: string;
+	/** Set when the note still carries a readable task id. */
+	taskId?: string;
+	title: string;
+	projectId: string;
+	/** The task the sync state has recorded against this path, if any. */
+	trackedTaskId?: string;
+}
+
+/**
+ * Pairs notes that have lost their task id with the tasks they belong to.
+ *
+ * A note stops being recognised for several ordinary reasons — the id property
+ * renamed, a settings change, a hand edit — and each one makes the note look
+ * brand new while leaving its task looking abandoned. Acting on either half
+ * produces a duplicate, so they are matched back together first.
+ *
+ * Pure on purpose: this is the decision that kept surviving code review and
+ * failing against a real vault, and it is only checkable in isolation.
+ */
+export function matchOrphansToTasks(
+	notes: OrphanCandidate[],
+	tasks: Task[],
+): Map<string, string> {
+	const key = (projectId: string, title: string): string =>
+		`${projectId}::${title.trim().toLowerCase()}`;
+
+	// Claimed means "a note found in this pass holds its id" — not merely
+	// "tracked". A task whose note has gone missing is still tracked, and is
+	// exactly the one worth adopting.
+	const claimed = new Set(notes.map((note) => note.taskId).filter(Boolean));
+
+	const available = new Map<string, Task>();
+	for (const task of tasks) {
+		if (claimed.has(task.id)) continue;
+		const k = key(task.projectId, task.title);
+		// First wins; duplicate titles are ambiguous however they are resolved.
+		if (!available.has(k)) available.set(k, task);
+	}
+
+	const live = new Set(tasks.map((task) => task.id));
+	const pairs = new Map<string, string>();
+
+	for (const note of notes) {
+		if (note.taskId) continue;
+
+		// Being tracked by path only counts while that task still exists. An entry
+		// left behind by a deleted task must not stop the note being re-linked.
+		if (note.trackedTaskId && live.has(note.trackedTaskId)) continue;
+
+		const k = key(note.projectId, note.title);
+		const twin = available.get(k);
+		if (!twin) continue;
+
+		available.delete(k);
+		pairs.set(note.path, twin.id);
+	}
+
+	return pairs;
 }
