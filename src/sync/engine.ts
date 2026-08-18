@@ -227,7 +227,7 @@ export class SyncEngine {
 			this.sections.clear();
 			this.sectionNames.clear();
 			this.sectionIdsByName.clear();
-			this.discoverBindings(report);
+			await this.discoverBindings(report);
 			this.completedFetched = false;
 			this.occurrenceNotes = 0;
 			this.occurrenceCapReported = false;
@@ -1705,14 +1705,20 @@ export class SyncEngine {
 	 * mistake worth seeing, and picking one of them would hide it while filing
 	 * work under a project that may not own it.
 	 */
-	private discoverBindings(report: SyncReport): void {
+	private async discoverBindings(report: SyncReport): Promise<void> {
 		const { notes, settings } = this.deps;
 		this.boundNotes.clear();
 
+		let scanned = 0;
+		let readFromDisk = 0;
 		for (const property of [settings.listBindingProperty, settings.sectionBindingProperty]) {
 			if (!property?.trim()) continue;
 
-			for (const [id, files] of notes.bindingsFor(property)) {
+			const result = await notes.bindingsFor(property);
+			scanned = result.scanned;
+			readFromDisk += result.readFromDisk;
+
+			for (const [id, files] of result.found) {
 				if (files.length > 1) {
 					report.errors.push(
 						`${files.length} notes claim the same ${property} "${id}" — ` +
@@ -1725,9 +1731,15 @@ export class SyncEngine {
 			}
 		}
 
-		if (this.boundNotes.size > 0) {
-			this.deps.log("Bindings found in the vault", Object.fromEntries(this.boundNotes));
-		}
+		// Logged even when nothing is found, deliberately. A silent nothing is
+		// indistinguishable from a feature that never ran, and telling those two
+		// apart cost a whole test cycle the first time this shipped.
+		this.deps.log("Bindings in the vault", {
+			properties: [settings.listBindingProperty, settings.sectionBindingProperty].filter(Boolean),
+			notesScanned: scanned,
+			readFromDisk,
+			found: Object.fromEntries(this.boundNotes),
+		});
 	}
 
 	/** The note a list or section is bound to, however that binding was made. */

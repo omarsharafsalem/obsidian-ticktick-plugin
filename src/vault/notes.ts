@@ -162,22 +162,48 @@ export class NoteRepository {
 	 * is visible when you open the note, it survives a settings reset, and it
 	 * travels with the vault.
 	 *
-	 * Read from Obsidian's own metadata cache, so this costs no file reads.
-	 * First declaration wins — two notes claiming the same list is ambiguous
-	 * however it is resolved, and the caller reports it rather than guessing.
+	 * Read from Obsidian's own metadata cache where it has one, so an ordinary
+	 * vault costs no file reads. Every claim on an id is returned, not the first:
+	 * two notes claiming one list is ambiguous however it is resolved, and the
+	 * caller reports it rather than picking.
 	 */
-	bindingsFor(property: string): Map<string, TFile[]> {
+	async bindingsFor(property: string): Promise<{
+		found: Map<string, TFile[]>;
+		scanned: number;
+		readFromDisk: number;
+	}> {
 		const found = new Map<string, TFile[]>();
 		const key = property.trim();
-		if (!key) return found;
+		if (!key) return { found, scanned: 0, readFromDisk: 0 };
 
-		for (const file of this.app.vault.getMarkdownFiles()) {
-			const raw = this.app.metadataCache?.getFileCache(file)?.frontmatter?.[key];
-			const value = typeof raw === "string" ? raw.trim() : "";
-			if (!value) continue;
-			found.set(value, [...(found.get(value) ?? []), file]);
+		const files = this.app.vault.getMarkdownFiles();
+		let readFromDisk = 0;
+
+		for (const file of files) {
+			const cached = this.app.metadataCache?.getFileCache(file);
+
+			// A file Obsidian has not indexed yet has no cache entry at all, which
+			// is not the same as one it has indexed and found nothing in. Only the
+			// first is worth a read: on a cold start, or for notes written from
+			// outside Obsidian, the cache lags and a binding would be invisible
+			// through no fault of the note. Files the cache does know are trusted,
+			// so an ordinary vault with no bindings costs no reads whatsoever.
+			let value: unknown = cached?.frontmatter?.[key];
+			if (cached === null || cached === undefined) {
+				readFromDisk++;
+				try {
+					value = splitFrontmatter(await this.app.vault.read(file)).frontmatter[key];
+				} catch {
+					continue;
+				}
+			}
+
+			const text = typeof value === "string" ? value.trim() : "";
+			if (!text) continue;
+			found.set(text, [...(found.get(text) ?? []), file]);
 		}
-		return found;
+
+		return { found, scanned: files.length, readFromDisk };
 	}
 
 	async ensureFolder(path: string): Promise<void> {
