@@ -19,14 +19,23 @@ export const OPEN_API_BASE = "https://api.ticktick.com/open/v1";
 /**
  * The Open API is much less limited than it is often described.
  *
- * It lists completed tasks (`POST /task/completed`) and reaches the Inbox
- * through `POST /task/filter` with the reserved id below. The one genuine gap
- * is a per-task modification time, which no endpoint returns.
+ * It lists completed tasks (`POST /task/completed`), reaches the Inbox through
+ * `POST /task/filter` with the reserved id below, and — measured against the
+ * live API on 18 Aug 2026 — returns a real `modifiedTime` on every task from
+ * `GET /project/{id}/data`, e.g. `2026-08-17T19:01:17.084+0000`.
+ *
+ * That last point is worth stating plainly because the opposite is widely
+ * repeated, and believing it costs the plugin "most recently edited wins":
+ * with no modification time the reconciler cannot date a remote edit at all
+ * and hands the server every conflict.
  */
 const OPEN_API_CAPABILITIES: Capabilities = {
 	completedHistory: true,
-	modifiedTime: false,
+	modifiedTime: true,
 	inbox: true,
+	// No cap has been established for `GET /project/{id}/data`. Left unset
+	// deliberately: a guessed one would either disable deletion detection for a
+	// legitimately sized list or fail to fire when it mattered.
 };
 
 /** TickTick's reserved project id for the Inbox, accepted by the filter endpoint. */
@@ -272,6 +281,10 @@ export class OpenApiClient implements TickTickClient {
 	async listTasksInProject(projectId: string): Promise<Task[]> {
 		// The Inbox has no `/project/{id}/data` endpoint; the filter endpoint is
 		// the only route to it. That caps the Inbox at 200 tasks per sync.
+		//
+		// Only the Inbox. `POST /task/filter` answers 500 `unknown_exception` for
+		// a real project id — measured against the live API on 18 Aug 2026 — so
+		// it is not an alternative to the per-project listing for anything else.
 		if (projectId === INBOX_PROJECT_ID) {
 			const raw = await this.send("POST", "/task/filter", {
 				projectIds: [INBOX_PROJECT_ID],
@@ -280,14 +293,15 @@ export class OpenApiClient implements TickTickClient {
 			return asArray(raw).map(normaliseTask);
 		}
 
-		try {
+		// A 404 here used to answer with an empty array, on the reasoning that a
+		// project deleted mid-pass should not abort the sync. It still should not,
+		// and it does not — the caller records the failure and moves to the next
+		// list. But an empty array is indistinguishable from "this list really has
+		// no tasks", which now means the list counts as read and every note behind
+		// it looks deleted. Letting it throw is what keeps those notes safe.
+		{
 			const raw = (await this.send("GET", `/project/${projectId}/data`)) as Json | undefined;
 			return asArray(raw?.["tasks"]).map(normaliseTask);
-		} catch (error) {
-			// A project deleted between listing and fetching is not an error worth
-			// aborting the whole sync for.
-			if (error instanceof ApiError && error.isNotFound) return [];
-			throw error;
 		}
 	}
 

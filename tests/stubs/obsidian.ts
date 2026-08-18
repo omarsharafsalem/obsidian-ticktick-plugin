@@ -26,7 +26,10 @@ export function debounce<T extends (...args: never[]) => unknown>(fn: T): T {
 
 export class TFile {
 	path = "";
+	/** Filename without the extension. */
 	basename = "";
+	/** Filename with it — a separate field in Obsidian, and read as one. */
+	name = "";
 	extension = "md";
 	stat = { mtime: 0, ctime: 0, size: 0 };
 }
