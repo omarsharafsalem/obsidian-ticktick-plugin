@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { emptyState, SyncStore } from "../src/sync/state";
 import { blankTask, type Task } from "../src/api/types";
 import { matchOrphansToTasks, type OrphanCandidate } from "../src/sync/engine";
 
@@ -156,5 +157,29 @@ describe("a note that never had a list", () => {
 			[task({ id: "right" }), task({ id: "wrong", projectId: "p9" })],
 		);
 		expect(pairs.get("n.md")).toBe("right");
+	});
+});
+
+describe("a note tracked against a task that no longer exists", () => {
+	// Found in live testing, 18 Aug. Deleting a task in TickTick under the default
+	// "keep the note" policy leaves the note tracked by path against a dead task.
+	// The creation guard then refused to ever make it a task again — and the error
+	// blamed the note's marker, while the real cause sat in the store.
+	const store = () => new SyncStore(emptyState());
+
+	it("is freed once the task is provably gone", () => {
+		const s = store();
+		s.set({ taskId: "dead", projectId: "p1", notePath: "n.md", base: {} } as never);
+		expect(s.getByPath("n.md")).toBeDefined();
+		s.forgetPath("n.md");
+		expect(s.getByPath("n.md")).toBeUndefined();
+		expect(s.get("dead")).toBeUndefined();
+	});
+
+	it("leaves an unrelated path alone", () => {
+		const s = store();
+		s.set({ taskId: "live", projectId: "p1", notePath: "keep.md", base: {} } as never);
+		s.forgetPath("missing.md");
+		expect(s.getByPath("keep.md")).toBeDefined();
 	});
 });

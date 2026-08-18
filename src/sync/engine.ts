@@ -1361,9 +1361,30 @@ export class SyncEngine {
 		for (const note of local) {
 			if (note.taskId) continue;
 			// Skip anything the store already knows by path — it is mid-link.
-			if (store.getByPath(note.file.path)) {
-				this.deps.log("Not creating a task: already tracked by path", note.file.path);
-				continue;
+			//
+			// Unless the task it is tracking has gone. Under the default "keep the
+			// note" policy, deleting a task in TickTick leaves its note behind still
+			// tracked against a task that no longer exists — and this guard would
+			// then refuse to ever make it a task again, blaming the note's marker in
+			// the error while the real cause sat in the store. Same dead-entry
+			// problem already fixed for adoption, in the one path it was missed.
+			//
+			// Only when the absence is *proved*, though: the list must have been read
+			// this pass and the completed listing fetched. Creating is the operation
+			// that multiplies, so an unread list must never look like a missing task.
+			const tracked = store.getByPath(note.file.path);
+			if (tracked) {
+				const listRead = !note.snapshot.projectId || syncedProjects.has(note.snapshot.projectId);
+				const proveGone = listRead && this.completedFetched && !remote.has(tracked.taskId);
+				if (!proveGone) {
+					this.deps.log("Not creating a task: already tracked by path", note.file.path);
+					continue;
+				}
+				this.deps.log("Tracked task no longer exists; letting the note be a task again", {
+					note: note.file.path,
+					deadTaskId: tracked.taskId,
+				});
+				store.forgetPath(note.file.path);
 			}
 			if (inASkippedList(note)) {
 				this.deps.log("Not creating a task: its list is not being synced", {

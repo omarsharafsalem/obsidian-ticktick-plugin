@@ -103,6 +103,19 @@ export class SyncStore {
 		return taskId ? this.state.entries[taskId] : undefined;
 	}
 
+	/**
+	 * Drops the entry tracking this path, and the path index with it.
+	 *
+	 * For an entry whose task has provably gone: left in place it keeps the note
+	 * bound to something that no longer exists, and no later pass can free it.
+	 */
+	forgetPath(path: string): void {
+		const taskId = this.pathIndex.get(path);
+		if (!taskId) return;
+		this.pathIndex.delete(path);
+		delete this.state.entries[taskId];
+	}
+
 	set(entry: SyncEntry): void {
 		const previous = this.state.entries[entry.taskId];
 		if (previous && previous.notePath !== entry.notePath) {
