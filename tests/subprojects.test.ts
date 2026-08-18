@@ -3,7 +3,7 @@ import { normaliseSection, normaliseTask, serialiseTask } from "../src/api/openA
 import { blankTask, type Task } from "../src/api/types";
 import { DEFAULT_PROPERTIES, DEFAULT_SETTINGS } from "../src/settings";
 import { DEFAULT_MAPPER_OPTIONS, noteToTask, taskToNote } from "../src/sync/mapper";
-import { folderForTask, resolveBinding } from "../src/sync/engine";
+import { dedupeFolders, folderForTask, resolveBinding } from "../src/sync/engine";
 
 const P = DEFAULT_PROPERTIES;
 
@@ -249,5 +249,35 @@ describe("a binding declared in the vault", () => {
 
 	it("is undefined for a task with no section", () => {
 		expect(resolveBinding(undefined, {}, found({ list1: ["Alpha"] }))).toBeUndefined();
+	});
+});
+
+// Found in live testing: pointing a list at a folder outside the task folder
+// wrote the note there and then lost it, because only the task folder was ever
+// scanned. Every folder the plugin can write to has to be one it also reads.
+describe("which folders get scanned", () => {
+	it("includes a list folder outside the task folder", () => {
+		expect(dedupeFolders(["Tasks", "🚀 Projects/Alpha/✅ Tasks"])).toEqual([
+			"Tasks",
+			"🚀 Projects/Alpha/✅ Tasks",
+		]);
+	});
+
+	it("drops a folder already covered by one of its parents", () => {
+		expect(dedupeFolders(["Tasks", "Tasks/Inbox"])).toEqual(["Tasks"]);
+	});
+
+	it("does not mistake a name that merely starts the same for a child", () => {
+		expect(dedupeFolders(["Tasks", "TasksArchive"])).toEqual(["Tasks", "TasksArchive"]);
+	});
+
+	// An unset folder means "not configured". Treating it as the vault root would
+	// read every note in the vault as a candidate task on the strength of a blank box.
+	it("drops blanks rather than reading them as the whole vault", () => {
+		expect(dedupeFolders(["Tasks", "", "   "])).toEqual(["Tasks"]);
+	});
+
+	it("collapses duplicates", () => {
+		expect(dedupeFolders(["Tasks", "Tasks", " Tasks "])).toEqual(["Tasks"]);
 	});
 });

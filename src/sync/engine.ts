@@ -437,9 +437,29 @@ export class SyncEngine {
 		// without one every note in the vault would look like a task.
 		const marker = settings.taskMarker;
 		const markerActive = marker.property.trim() !== "";
-		const files = notes.listMarkdown(
-			markerActive && settings.discoverAnywhere ? "" : settings.taskFolder,
-		);
+
+		// Every folder this plugin might *write* a note to has to be a folder it
+		// also reads. Pointing a list at a folder outside the task folder used to
+		// write the note there and then lose it on the very next pass: the note
+		// existed, carried its id, and was reported as "not recognised as a task"
+		// because nothing had looked where it was put.
+		const searched = markerActive && settings.discoverAnywhere ? [""] : dedupeFolders([
+			settings.taskFolder,
+			...Object.values(settings.listFolders),
+			...Object.values(settings.listKinds).map((routing) => routing.folder),
+			settings.archiveFolder,
+			settings.deletedTaskFolder,
+		]);
+
+		const seen = new Set<string>();
+		const files: TFile[] = [];
+		for (const folder of searched) {
+			for (const file of notes.listMarkdown(folder)) {
+				if (seen.has(file.path)) continue;
+				seen.add(file.path);
+				files.push(file);
+			}
+		}
 
 		// The list property holds a name, or a link to the list's own note, so
 		// reading a note means turning either back into an id. Matched
@@ -1931,6 +1951,20 @@ export function resolveBinding(
 	if (explicit) return explicit;
 	const claims = discovered.get(id);
 	return claims?.length === 1 ? claims[0] : undefined;
+}
+
+/**
+ * The distinct folders worth scanning, with nested ones folded into their parent.
+ *
+ * Blank entries are dropped rather than treated as the vault root: an unset
+ * folder means "not configured", and scanning everything on the strength of an
+ * empty box is how a whole vault would be read as task notes.
+ */
+export function dedupeFolders(folders: string[]): string[] {
+	const cleaned = [...new Set(folders.map((f) => f?.trim()).filter((f): f is string => !!f))];
+	return cleaned
+		.filter((folder) => !cleaned.some((other) => other !== folder && folder.startsWith(`${other}/`)))
+		.sort();
 }
 
 export function folderForTask(
