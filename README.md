@@ -148,6 +148,34 @@ a handful of attempts. Not a trade worth making for one tie-break rule.
 That is the whole setup — no app registration, no client ID or secret, no redirect URI, and no
 password. Treat the token like a password: it grants access to your account.
 
+### Nothing syncs until you start it
+
+Pasting the token **connects only**. No task note is read or written — no scheduled sync, no sync on
+startup, no manual sync — until you press **Start syncing** on the Connection tab.
+
+That is deliberate. What a sync actually does to a vault is decided by the property names, the value
+labels, the task marker, which lists and which folders, and all of them are empty when the token
+goes in. A sync that runs first writes notes across the vault that then have to be undone by hand.
+
+Loading your lists still works while syncing is stopped, because choosing them is part of the setup
+this is protecting. Upgrading an install that has already been syncing does not switch it off: its
+own sync state says it has synced before, and it stays started.
+
+**Pause syncing** stops everything again and changes nothing on either side.
+
+### Checking a configuration before it runs
+
+| Command | What it does |
+| --- | --- |
+| **Preview sync** | Reports what the next sync would do, note by note — created, updated, moved, orphaned, deleted — and writes it to `TickTick sync preview.md`. Changes nothing, and works before syncing has been started |
+| **Export settings to a note** | Writes your configuration to `TickTick sync settings.md`, so it can be read in one screen rather than clicked through in eight tabs. Credentials are left out, so the note is safe to paste anywhere |
+| **Import settings from the note** | Applies that note, and says which settings changed. It can never set credentials or start syncing — those come from what is already installed |
+| **Reload settings from disk** | Re-reads `data.json`, so settings edited outside Obsidian take effect without restarting it |
+
+A preview is not trusted to behave: it is handed a client that refuses every write, a note
+repository that refuses every write, and a throwaway copy of the sync state. A write it attempted
+anyway would appear in the report's problem list instead of in your vault.
+
 ### OAuth
 
 Only needed to authorise accounts other than your own.
@@ -182,12 +210,15 @@ To try it in a vault, symlink or copy `main.js`, `manifest.json` and `styles.css
 | `src/sync/mapper.ts` | Task ↔ note translation. Pure: no Obsidian imports, no filesystem |
 | `src/sync/engine.ts` | Orchestration and I/O only — it holds no policy of its own |
 | `src/sync/state.ts` | The agreed-state store, ID map and tombstones |
+| `src/sync/preview.ts` | The dry run's read-only client, vault and store, and the report it writes |
+| `src/settingsDocument.ts` | Settings to and from a readable note. Pure: no Obsidian, no vault |
 | `src/util/tags.ts` | Unicode-aware tag parsing |
 | `src/vault/` | Vault I/O, YAML frontmatter, property type registration |
 
 The policy modules are pure by design, so conflict behaviour is testable without a vault or a
-network. 107 unit tests cover tag parsing, the mapper round-trip, merge decisions, direction rules,
-wire-format normalisation, all-day dates across timezones, and the request queue's retry rules.
+network. 235 unit tests cover tag parsing, the mapper round-trip, merge decisions, direction rules,
+wire-format normalisation, all-day dates across timezones, the request queue's retry rules, the
+upgrade path for an install that was already syncing, and the dry run's inability to write.
 
 ## Status and limitations
 
