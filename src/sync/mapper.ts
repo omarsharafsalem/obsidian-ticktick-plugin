@@ -743,7 +743,15 @@ export function noteToTask(
 		statusNeutral,
 		privateBody,
 		completions,
-		title: filenameTitle,
+		// The filename is the authoritative title *unless* the title property spells
+		// out one the filename cannot hold. `resolveTitle` settles which: the
+		// override wins while the filename is still exactly what it sanitises to,
+		// and a filename that differs is a genuine rename, so it wins instead.
+		//
+		// This was documented above as the behaviour and never actually done — the
+		// filename was returned unconditionally, so a title with a colon or a slash
+		// was flattened on every push and there was no way to say otherwise.
+		title: resolveTitle(filenameTitle, readString(readProperty(fm, p, "title"))),
 		content,
 		status: readStatus(fm[p.status], fm[p.completed], labels),
 		priority: readPriority(fm[p.priority], labels),

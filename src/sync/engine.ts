@@ -1061,7 +1061,10 @@ export class SyncEngine {
 			case "restoreRemote": {
 				if (!localNote) return;
 				const created = await client.createTask(
-					this.toNewTask(action.snapshot, localNote.snapshot.projectId),
+					this.withNoteLink(
+						this.toNewTask(action.snapshot, localNote.snapshot.projectId),
+						localNote.file,
+					),
 				);
 				await this.stampNote(localNote.file, created, action.snapshot, localNote);
 				store.set(this.entryFor(created, localNote.file.path, action.snapshot, Date.now()));
@@ -1431,7 +1434,10 @@ export class SyncEngine {
 			try {
 				this.deps.log("Creating a TickTick task from", note.file.path);
 				const created = await client.createTask(
-					this.toNewTask(note.snapshot, note.snapshot.projectId || inbox || ""),
+					this.withNoteLink(
+						this.toNewTask(note.snapshot, note.snapshot.projectId || inbox || ""),
+						note.file,
+					),
 				);
 				await this.stampNote(note.file, created, note.snapshot, note);
 				store.set(this.entryFor(created, note.file.path, note.snapshot, Date.now()));
@@ -1564,8 +1570,15 @@ export class SyncEngine {
 		return allowed;
 	}
 
-	/** Attaches the note's own URL so TickTick's description can link back to it. */
-	private withNoteLink(task: Task, file: TFile): Task {
+	/**
+	 * Attaches the note's own URL so TickTick's description can link back to it.
+	 *
+	 * Generic over the task shape because a task being *created* has no id yet,
+	 * and creation is exactly where this was being missed: the link was only ever
+	 * attached on update, so a task made from a note and never edited again had
+	 * nothing pointing back at the note it came from.
+	 */
+	private withNoteLink<T extends { noteUrl?: string }>(task: T, file: TFile): T {
 		if (!this.deps.settings.linkBackToNote) return task;
 		return { ...task, noteUrl: this.deps.notes.noteUrl(file) };
 	}

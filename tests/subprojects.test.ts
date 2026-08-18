@@ -104,3 +104,32 @@ describe("sending the section back", () => {
 		expect(body).not.toHaveProperty("columnId");
 	});
 });
+
+// Both found in live testing, 18 Aug, running file 10 against the real account.
+describe("a title a filename cannot hold", () => {
+	const P2 = DEFAULT_PROPERTIES;
+	const parse = (fm: Record<string, unknown>, filename: string) =>
+		noteToTask({ frontmatter: { [P2.id]: "t1", ...fm }, body: "" }, filename, {
+			...DEFAULT_MAPPER_OPTIONS,
+			properties: P2,
+		});
+
+	// noteToTask documented the title property as "an explicit override" and then
+	// returned the filename unconditionally, so `Read: chapter 3/4` was flattened
+	// to `Read- chapter 3-4` on every push with no way to say otherwise.
+	it("uses the title property when the filename is its sanitised form", () => {
+		expect(parse({ [P2.title]: "Read: chapter 3/4" }, "Read- chapter 3-4").title).toBe(
+			"Read: chapter 3/4",
+		);
+	});
+
+	it("still lets a genuine rename win", () => {
+		expect(parse({ [P2.title]: "Read: chapter 3/4" }, "Something else entirely").title).toBe(
+			"Something else entirely",
+		);
+	});
+
+	it("falls back to the filename when no override is written", () => {
+		expect(parse({}, "Buy milk").title).toBe("Buy milk");
+	});
+});
