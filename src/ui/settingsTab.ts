@@ -33,7 +33,7 @@ const FIELD_LABELS: Record<SyncedField, string> = {
 	repeatFlag: "Recurrence",
 	items: "Subtasks",
 	projectId: "List",
-	columnId: "Sub-project (section)",
+	columnId: "Section",
 	parentId: "Parent task",
 };
 
@@ -45,7 +45,6 @@ const KIND_LABELS: Record<ProjectKind, string> = {
 const PROPERTY_LABELS: Record<keyof PropertyNames, string> = {
 	id: "Task ID",
 	project: "List",
-	subproject: "Sub-project",
 	sessionsDone: "Sessions done",
 	lastSession: "Last session",
 	title: "Title override",
@@ -854,19 +853,20 @@ export class TickTickSettingTab extends PluginSettingTab {
 					}),
 				);
 
-			// One row per section, so a sub-project can be pointed at its note the
-			// same way its project is. A section is the only container TickTick has
-			// below a list, which is what makes it the place a sub-project lives.
+			// One row per section, so a small project can be pointed at its note the
+			// same way any other project is. A section is the only container
+			// TickTick has inside a list, which is what makes it the place a
+			// project that does not deserve a list of its own can live.
 			for (const section of this.sections.get(project.id) ?? []) {
 				new Setting(root)
-					.setClass("ticktick-subproject-row")
+					.setClass("ticktick-section-row")
 					.setName(`↳ ${section.name}`)
 					.setDesc(
-						"A section of this list. Normally a sub-project — part of the work the list " +
-							"stands for. Switch it to its own project when the list is a shared " +
-							"container holding several unrelated projects, a section each. Give it a " +
-							"folder too: a project's base gathers by folder, so the note has to land " +
-							"inside the project for its views to see it.",
+						"A section of this list. Point it at a note and that note becomes the " +
+							"project for every task in the section — the list's own note no longer " +
+							"answers for them. That is how several small projects share one list. " +
+							"Leave it blank and the section is just a section; its tasks still " +
+							"belong to the list's project.",
 					)
 					.addText((text) => {
 						text.setPlaceholder("Folder for this section's notes");
@@ -885,17 +885,6 @@ export class TickTickSettingTab extends PluginSettingTab {
 							else delete settings.listPages[section.id];
 							await this.plugin.saveSettings();
 						});
-					})
-					.addDropdown((drop) => {
-						drop
-							.addOption("sub", "Sub-project")
-							.addOption("own", "Its own project")
-							.setValue(settings.sectionIsProject[section.id] ? "own" : "sub")
-							.onChange(async (value) => {
-								if (value === "own") settings.sectionIsProject[section.id] = true;
-								else delete settings.sectionIsProject[section.id];
-								await this.plugin.saveSettings();
-							});
 					});
 			}
 		}

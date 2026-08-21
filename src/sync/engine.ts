@@ -113,7 +113,6 @@ interface LocalNote {
 	 * from the write. A task in no section would therefore erase a sub-project
 	 * the user set by hand, on every single sync.
 	 */
-	subprojectLabel?: string;
 	/** Aliases already on the note, so writing one never drops another. */
 	aliases?: string[];
 	/** This task's own answer to the recurrence rule, when the property is set. */
@@ -203,6 +202,15 @@ export class SyncEngine {
 	private readonly sectionIdsByName = new Map<string, string[]>();
 
 	/**
+	 * Section id → the list holding it.
+	 *
+	 * A project bound to a section still has to be pushed to a list, because a
+	 * column id alone does not place a task. This is also how a resolved id is
+	 * told apart from a list id at all: a list is in no list.
+	 */
+	private readonly sectionLists = new Map<string, string>();
+
+	/**
 	 * List or section id → the note that claims it, found by scanning the vault.
 	 *
 	 * The alternative to configuring the same fact twice. A project note saying
@@ -262,6 +270,7 @@ export class SyncEngine {
 			this.sections.clear();
 			this.sectionNames.clear();
 			this.sectionIdsByName.clear();
+			this.sectionLists.clear();
 			await this.discoverBindings(report);
 			this.completedFetched = false;
 			this.occurrenceNotes = 0;
@@ -369,12 +378,14 @@ export class SyncEngine {
 			try {
 				const { tasks, sections } = await this.deps.client.listTasksInProject(project.id);
 
-				// Sections are how a task says which sub-project it belongs to, and
-				// the only way back from the name a note carries to the id a push
-				// needs. Indexed per list, because two lists may name a section alike.
+				// A section is how a project too small to deserve a list of its own
+				// claims its work, and the only way back from the name a note
+				// carries to the id a push needs. Indexed per list, because two
+				// lists may name a section alike.
 				for (const section of sections) {
 					this.sections.set(`${project.id}::${section.name.trim().toLowerCase()}`, section.id);
 					this.sectionNames.set(section.id, section.name);
+					this.sectionLists.set(section.id, project.id);
 					const byName = section.name.trim().toLowerCase();
 					this.sectionIdsByName.set(byName, [
 						...(this.sectionIdsByName.get(byName) ?? []),
@@ -502,6 +513,18 @@ export class SyncEngine {
 		const idsByName = new Map<string, string>();
 		for (const [id, name] of projectNames) idsByName.set(name.trim().toLowerCase(), id);
 
+		// A note that claimed a list or a section in its own frontmatter answers
+		// to its title too. Without this a project bound to a *section* could
+		// never be pushed to: the section's name and the note's title need not
+		// match, and the note's title is what every task's project property says.
+		//
+		// Ahead of settings and behind nothing else: an explicit claim in the
+		// vault beats a list that merely happens to share the note's name, and
+		// `listPages` below still wins, on the standing rule that settings do.
+		for (const [id, basename] of this.boundNotes) {
+			idsByName.set(basename.trim().toLowerCase(), id);
+		}
+
 		// A configured project note is matched by its full path and by its
 		// basename, because [[Health]] and [[Areas/Health]] mean the same note.
 		for (const [projectId, page] of Object.entries(settings.listPages)) {
@@ -516,17 +539,24 @@ export class SyncEngine {
 			inlineTags: settings.inlineTags,
 			labels: settings.labels,
 			syncedRegionMarker: settings.syncedRegionMarker,
-			resolveProject: (nameOrId: string) =>
-				idsByName.get(nameOrId.trim().toLowerCase()) ??
-				(projectNames.has(nameOrId) ? nameOrId : undefined),
-			resolveTaskLink: this.links.resolveTaskLink,
-			// Only when exactly one section answers to the name. Two lists may name
-			// a section alike, and filing a task under the wrong sub-project is a
-			// worse outcome than leaving the property for a person to settle.
-			resolveSection: (nameOrLink: string) => {
-				const ids = this.sectionIdsByName.get(nameOrLink.trim().toLowerCase()) ?? [];
-				return ids.length === 1 ? ids[0] : undefined;
+			// A project note names either a list or a section, and a note that
+			// claims one is looked up the same way as a note that claims the other.
+			//
+			// A bare section *name* only resolves when exactly one section answers
+			// to it: two lists may name a section alike, and filing real work under
+			// the wrong project is worse than leaving the property for a person to
+			// settle. A name that resolves to nothing is never guessed at.
+			resolveProject: (nameOrId: string) => {
+				const key = nameOrId.trim().toLowerCase();
+				const bound = idsByName.get(key);
+				if (bound) return bound;
+				if (projectNames.has(nameOrId)) return nameOrId;
+				if (this.sectionLists.has(nameOrId)) return nameOrId;
+				const named = this.sectionIdsByName.get(key) ?? [];
+				return named.length === 1 ? named[0] : undefined;
 			},
+			listForSection: (id: string) => this.sectionLists.get(id),
+			resolveTaskLink: this.links.resolveTaskLink,
 		};
 
 		// Folders mapped to a list, longest first so a nested mapping wins over the
@@ -586,7 +616,6 @@ export class SyncEngine {
 					privateBody: parsed.privateBody,
 					completions: parsed.completions,
 					statusLabel: readStatusLabel(note.frontmatter[settings.properties.status]),
-					subprojectLabel: readStatusLabel(note.frontmatter[settings.properties.subproject]),
 					aliases: readAliases(note.frontmatter["aliases"]),
 					// Read straight off the frontmatter rather than through the mapper:
 					// the property is the user's, never written by the plugin, and it
@@ -1651,7 +1680,6 @@ export class SyncEngine {
 			file,
 			this.render(task, {
 				currentStatus: note?.statusLabel,
-				currentSubproject: note?.subprojectLabel,
 				privateBody: note?.privateBody,
 				completions: note?.completions,
 				filenameTitle: basenameOf(desired),
@@ -1728,7 +1756,6 @@ export class SyncEngine {
 			file,
 			this.render(merged, {
 				currentStatus: note?.statusLabel,
-				currentSubproject: note?.subprojectLabel,
 				privateBody: note?.privateBody,
 				completions: note?.completions,
 			}),
@@ -1778,7 +1805,6 @@ export class SyncEngine {
 			currentStatus?: string;
 			privateBody?: string;
 			completions?: string[];
-			currentSubproject?: string;
 			filenameTitle?: string;
 			aliases?: string[];
 		},
@@ -1813,15 +1839,17 @@ export class SyncEngine {
 				...this.links.contextFor(task),
 				filenameTitle: note?.filenameTitle,
 				currentAliases: note?.aliases,
-				// A section named in settings gets a link, so the sub-project note
-				// gathers its work through backlinks exactly as a project note does.
+				// The section wins over the list when a note claims it, because then
+				// the section *is* the project: one list can hold several small
+				// projects, a section each, and the list stands for the area rather
+				// than for any of them.
 				//
-				// Unless the section *is* the project. One list can hold work for
-				// several projects — a shared list with a section each — and then the
-				// section answers "which project", leaving no sub-project to name.
-				...(task.columnId && this.deps.settings.sectionIsProject[task.columnId]
+				// Only when a note actually claims it. A section nothing claims is
+				// just a section — the list's own note still answers "which project",
+				// and overriding it with an empty link would strand the task.
+				...(task.columnId && this.noteBoundTo(task.columnId)
 					? { projectLink: projectPageLink(this.noteBoundTo(task.columnId)) }
-					: { subprojectLink: projectPageLink(this.noteBoundTo(task.columnId)) }),
+					: {}),
 				...note,
 			},
 		);

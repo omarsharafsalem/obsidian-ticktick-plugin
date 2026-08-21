@@ -18,8 +18,6 @@ import type { SyncState } from "./sync/state";
 export interface PropertyNames {
 	id: string;
 	project: string;
-	/** The sub-project — a section inside the list. */
-	subproject: string;
 	/** How many times a repeating task has been completed. */
 	sessionsDone: string;
 	/** When a repeating task was last completed. */
@@ -48,7 +46,6 @@ export interface PropertyNames {
 export const DEFAULT_PROPERTIES: PropertyNames = {
 	id: "ticktick_task_id",
 	project: "project",
-	subproject: "subproject",
 	sessionsDone: "sessions_done",
 	lastSession: "last_session",
 	status: "status",
@@ -80,7 +77,6 @@ export const PROPERTY_TYPES: Partial<Record<keyof PropertyNames, string>> = {
 	status: "multitext",
 	priority: "multitext",
 	project: "multitext",
-	subproject: "multitext",
 	sessionsDone: "number",
 	lastSession: "date",
 	parent: "text",
@@ -390,20 +386,6 @@ export interface TickTickSyncSettings {
 	listPages: Record<string, string>;
 
 	/**
-	 * Sections that stand for a project in their own right, keyed by section id.
-	 *
-	 * A section is normally a sub-project — a part of the work its list stands
-	 * for. But a list can also be a shared container holding several unrelated
-	 * projects, one section each, and then the section answers "which project"
-	 * and there is no sub-project to name.
-	 *
-	 * Pair it with a folder in {@link listFolders} for the same section: a
-	 * project's `.base` gathers its notes with `file.inFolder(...)`, so the
-	 * property alone would name the project without putting the note in its view.
-	 */
-	sectionIsProject: Record<string, boolean>;
-
-	/**
 	 * Frontmatter property by which a project note claims a TickTick list.
 	 *
 	 * A note saying `ticktick_list_id: <id>` binds that list to itself, and every
@@ -415,7 +397,17 @@ export interface TickTickSyncSettings {
 	 */
 	listBindingProperty: string;
 
-	/** The same thing one level down: a note claiming a section. */
+	/**
+	 * The same thing for a project that claims a section instead of a list.
+	 *
+	 * Not a level down — the other of two placements. A project too small to
+	 * deserve a list of its own occupies a section of one its area already has,
+	 * and binds to it exactly as any other project binds to its list. Its tasks
+	 * carry the same single project link; nothing about them says "section".
+	 *
+	 * A note setting both this and {@link listBindingProperty} is ambiguous and
+	 * neither is used, on the same rule as two notes claiming one list.
+	 */
 	sectionBindingProperty: string;
 
 	/**
@@ -562,7 +554,6 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	listKinds: { TASK: { ...DEFAULT_LIST_KINDS.TASK }, NOTE: { ...DEFAULT_LIST_KINDS.NOTE } },
 	listFolders: {},
 	listPages: {},
-	sectionIsProject: {},
 	listBindingProperty: "ticktick_list_id",
 	sectionBindingProperty: "ticktick_section_id",
 	deletedTaskFolder: "🗄️ Archive",

@@ -41,17 +41,15 @@ export interface NoteContext {
 	 * Written instead of the plain list name so the task appears in that note's
 	 * backlinks, which is how a project page gathers its own work.
 	 */
-	projectLink?: TaskLink;
-	/** The note representing this task's section, when one is configured. */
-	subprojectLink?: TaskLink;
 	/**
-	 * What the note's sub-project property says now.
+	 * The note representing this task's project.
 	 *
-	 * Kept so it can be left exactly as it is when the task reports no section.
-	 * A task with no section is not a task whose sub-project has been cleared —
-	 * it may simply be filed in a list this pass could not read sections for.
+	 * A project claims either a list or a section of one, so this is whichever
+	 * note claims the task's own section, falling back to the note claiming its
+	 * list. One link either way — a section is a placement, not a level, so a
+	 * task in one carries no second project link.
 	 */
-	currentSubproject?: string;
+	projectLink?: TaskLink;
 	/**
 	 * The note's own filename, without the extension, when it has one yet.
 	 *
@@ -160,14 +158,22 @@ export interface MapperOptions {
 	 * vault owner's alias list is not somewhere to write uninvited.
 	 */
 	aliasTitles?: boolean;
+	/**
+	 * Turns whatever the project property says into the id it names.
+	 *
+	 * That id may be a list or a section, because a project is bound to either.
+	 * Pair it with {@link listForSection} to tell the two apart.
+	 */
 	resolveProject?: (nameOrId: string) => string | undefined;
 	/**
-	 * Turns whatever is written in the sub-project property back into a section id.
+	 * The list containing the given id, when that id is a section — otherwise
+	 * undefined, which is also the answer for a list.
 	 *
-	 * Scoped to the note's own list by the caller, since two lists may name a
-	 * section alike and the wrong id files the task under the wrong sub-project.
+	 * Both facts come from one call on purpose: "is this a section" and "which
+	 * list holds it" are never usefully asked apart, and a caller that could ask
+	 * only the first would have no way to place the task it just identified.
 	 */
-	resolveSection?: (nameOrLink: string) => string | undefined;
+	listForSection?: (id: string) => string | undefined;
 	/** The words this vault uses for statuses, priorities and reminders. */
 	labels?: ValueLabels;
 	/** Turns a wikilink target — a note title or path — back into a task id. */
@@ -496,14 +502,6 @@ export function taskToNote(
 		[p.priority]: labels.priority[task.priority] ?? task.priority,
 	};
 
-	// Written only when the task actually reports a section, or when the note
-	// already had one to keep. Writing an empty value on every task with no
-	// section is how a sub-project set by hand would be wiped by the next sync.
-	const subproject = context.subprojectLink
-		? formatWikilink(context.subprojectLink)
-		: (task.columnName ?? context.currentSubproject);
-	if (subproject) frontmatter[p.subproject] = subproject;
-
 	// Written only when the filename cannot carry the title, so an ordinary task
 	// gains nothing and a punctuated one is still readable. The sync does not
 	// depend on it — the real title lives in the plugin's state — but a person
@@ -805,21 +803,24 @@ export function noteToTask(
 	// a note title is never a list id and guessing would move the task.
 	const projectRef = readString(readProperty(fm, p, "project"));
 	const projectTarget = projectRef ? parseWikilink(projectRef) : undefined;
-	const projectId = projectRef
+	const resolved = projectRef
 		? projectTarget !== undefined
 			? options.resolveProject?.(projectTarget)
 			: (options.resolveProject?.(projectRef) ?? projectRef)
 		: undefined;
 
-	// Resolved back to a section id the same way the list is: a link is followed,
-	// a plain name is looked up, and anything that resolves to nothing is left
-	// undefined rather than guessed at — an unresolved name is not an id, and
-	// sending a wrong one files the task under the wrong sub-project.
-	const subprojectRef = readString(readProperty(fm, p, "subproject"));
-	const subprojectTarget = subprojectRef ? parseWikilink(subprojectRef) : undefined;
-	const columnId = subprojectRef
-		? options.resolveSection?.(subprojectTarget ?? subprojectRef)
-		: undefined;
+	// The project property answers both questions at once, because a project is
+	// bound to a list or to a section of one and the note never says which. What
+	// it resolved to is asked whether it is a section; if it is, the section is
+	// the column and *its own list* is the list to send to — a column id alone
+	// will not place a task. A list resolves to no containing list and falls
+	// straight through as itself.
+	//
+	// There is no second property to read. A task in a section belongs to a
+	// project like any other task, so nothing about it is written down twice.
+	const sectionsList = resolved ? options.listForSection?.(resolved) : undefined;
+	const columnId = sectionsList ? resolved : undefined;
+	const projectId = sectionsList ?? resolved;
 
 	const statusRaw = readScalar(fm[p.status]);
 	const statusNeutral = typeof statusRaw === "string" && isNeutralStatus(statusRaw, labels);

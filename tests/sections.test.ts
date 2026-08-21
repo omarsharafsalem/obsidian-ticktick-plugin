@@ -11,9 +11,13 @@ function task(overrides: Partial<Task> = {}): Task {
 	return { ...blankTask("p1"), id: "t1", title: "Write the spec", ...overrides };
 }
 
-// A TickTick folder is an *area*, and a list is a project — so neither can say
-// which sub-project a task belongs to. A section can: it is the only container
-// below a list, and it travels with the task on the wire.
+// A TickTick folder is an *area* and a list is a project, so a project too small
+// to deserve a list of its own has nowhere to go — except a section. A section is
+// the only container inside a list, and it travels with the task on the wire.
+//
+// A section is a *placement*, not a level: a task in one belongs to a project like
+// any other task and carries one project link. The `subproject` property and the
+// fourth tier it implied were removed 21 Aug 2026.
 describe("reading a section off the wire", () => {
 	it("keeps the section's id and its name", () => {
 		const t = normaliseTask({
@@ -21,10 +25,10 @@ describe("reading a section off the wire", () => {
 			projectId: "p1",
 			title: "Probe",
 			columnId: "c1",
-			columnName: "Sub-project probe",
+			columnName: "Section probe",
 		});
 		expect(t.columnId).toBe("c1");
-		expect(t.columnName).toBe("Sub-project probe");
+		expect(t.columnName).toBe("Section probe");
 	});
 
 	it("reads the sections a list returns alongside its tasks", () => {
@@ -36,59 +40,84 @@ describe("reading a section off the wire", () => {
 	});
 });
 
-describe("writing the sub-project onto a note", () => {
-	it("writes the section's name", () => {
-		const note = taskToNote(task({ columnId: "c1", columnName: "Build" }));
-		expect(note.frontmatter[P.subproject]).toBe("Build");
-	});
-
-	it("writes a link when the section has a note, so backlinks gather the work", () => {
+describe("a section standing for its own project", () => {
+	// The whole point of the rewrite. A note claiming the *section* answers for
+	// the task, so several small projects can share one list without the list's
+	// note claiming work that is not its.
+	it("writes the section's note as the project", () => {
 		const note = taskToNote(task({ columnId: "c1", columnName: "Build" }), undefined, {
-			subprojectLink: { title: "🚀 TickTick Plugin" },
+			projectLink: { title: "🚀 Ghazali Book" },
 		});
-		expect(note.frontmatter[P.subproject]).toBe("[[🚀 TickTick Plugin]]");
+		expect(note.frontmatter[P.project]).toBe("[[🚀 Ghazali Book]]");
 	});
 
-	// The rule that matters. `NoteRepository.write` deletes any managed property
-	// absent from the write, so a task in no section would otherwise erase a
-	// sub-project set by hand — on every single sync, silently.
-	it("keeps a sub-project the task itself knows nothing about", () => {
-		const note = taskToNote(task(), undefined, { currentSubproject: "[[🚀 TickTick Plugin]]" });
-		expect(note.frontmatter[P.subproject]).toBe("[[🚀 TickTick Plugin]]");
-	});
-
-	it("writes nothing at all when there is neither a section nor an existing value", () => {
-		expect(taskToNote(task()).frontmatter).not.toHaveProperty(P.subproject);
-	});
-
-	it("lets the task's own section win over what the note used to say", () => {
-		const note = taskToNote(task({ columnId: "c2", columnName: "Ship" }), undefined, {
-			currentSubproject: "Build",
+	// The property that carried the fourth tier. Its absence is the feature: a
+	// task in a section is a task in a project, and saying so twice was the
+	// thing that made sub-projects worth removing.
+	it("writes no second project property, whatever the section is called", () => {
+		const note = taskToNote(task({ columnId: "c1", columnName: "Build" }), undefined, {
+			projectLink: { title: "🚀 Ghazali Book" },
 		});
-		expect(note.frontmatter[P.subproject]).toBe("Ship");
+		expect(note.frontmatter).not.toHaveProperty("subproject");
+		expect(Object.values(note.frontmatter)).not.toContain("Build");
+	});
+
+	it("still carries the list's note when nothing claims the section", () => {
+		const note = taskToNote(task({ columnId: "c1", columnName: "Build" }), undefined, {
+			projectLink: { title: "🏠 Personal" },
+		});
+		expect(note.frontmatter[P.project]).toBe("[[🏠 Personal]]");
 	});
 });
 
-describe("reading the sub-project back off a note", () => {
-	const parse = (value: string, resolve?: (n: string) => string | undefined) =>
+describe("reading a small project's section back off a note", () => {
+	// One property, two answers. `project` resolves to a list or a section, and
+	// a section is told apart by having a list of its own to sit in.
+	const parse = (
+		value: string,
+		resolve?: (n: string) => string | undefined,
+		listFor?: (id: string) => string | undefined,
+	) =>
 		noteToTask(
-			{ frontmatter: { [P.id]: "t1", [P.subproject]: value }, body: "" },
+			{ frontmatter: { [P.id]: "t1", [P.project]: value }, body: "" },
 			"Write the spec",
-			{ ...DEFAULT_MAPPER_OPTIONS, properties: P, resolveSection: resolve },
+			{
+				...DEFAULT_MAPPER_OPTIONS,
+				properties: P,
+				resolveProject: resolve,
+				listForSection: listFor,
+			},
 		);
 
-	it("resolves a plain name to the section's id", () => {
-		expect(parse("Build", (n) => (n === "Build" ? "c1" : undefined)).columnId).toBe("c1");
+	const asSection = (n: string) => (n === "Ghazali Book" ? "c1" : undefined);
+	const inList = (id: string) => (id === "c1" ? "p1" : undefined);
+
+	// A column id alone will not place a task, so resolving to a section has to
+	// yield the containing list too or the push has nowhere to send it.
+	it("sends a section-bound project to the section AND its list", () => {
+		const t = parse("Ghazali Book", asSection, inList);
+		expect(t.columnId).toBe("c1");
+		expect(t.projectId).toBe("p1");
 	});
 
 	it("resolves a link by its target, not its raw text", () => {
-		expect(parse("[[Build]]", (n) => (n === "Build" ? "c1" : undefined)).columnId).toBe("c1");
+		const t = parse("[[Ghazali Book]]", asSection, inList);
+		expect(t.columnId).toBe("c1");
+		expect(t.projectId).toBe("p1");
 	});
 
-	// Two lists may name a section alike, and filing a task under the wrong
-	// sub-project is worse than leaving the property for a person to settle.
+	// A list is in no list. That is the whole test for telling the two apart.
+	it("leaves a list-bound project with no section at all", () => {
+		const t = parse("Personal", (n) => (n === "Personal" ? "p1" : undefined), inList);
+		expect(t.projectId).toBe("p1");
+		expect(t.columnId).toBeUndefined();
+	});
+
+	// Two lists may name a section alike, and filing real work under the wrong
+	// project is worse than leaving the property for a person to settle.
 	it("refuses to guess when the name resolves to nothing", () => {
-		expect(parse("Build", () => undefined).columnId).toBeUndefined();
+		const t = parse("Ghazali Book", () => undefined, inList);
+		expect(t.columnId).toBeUndefined();
 	});
 });
 
