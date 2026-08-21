@@ -581,6 +581,26 @@ export class TickTickSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(root)
+			.setName("Stop if more than this many new notes")
+			.setDesc(
+				"The same thing the other way round: a task whose note stops being recognised looks " +
+					"like a task with no note, so one bad match fills the vault with duplicates. Above " +
+					"this count nothing is created and the sync says so instead. Your first sync is " +
+					"exempt — it is meant to create a note per task — so if this ever fires, something " +
+					"has stopped matching and raising it would only make more duplicates. 0 removes " +
+					"the limit.",
+			)
+			.addText((text) =>
+				text.setValue(String(settings.maxNewNotesPerSync)).onChange(async (value) => {
+					const limit = Number.parseInt(value, 10);
+					if (Number.isFinite(limit) && limit >= 0) {
+						settings.maxNewNotesPerSync = limit;
+						await this.plugin.saveSettings();
+					}
+				}),
+			);
+
+		new Setting(root)
 			.setName("Stop if more than this many tasks would be deleted")
 			.setDesc(
 				"A task is deleted in TickTick when its note is gone — but a note that simply was not " +

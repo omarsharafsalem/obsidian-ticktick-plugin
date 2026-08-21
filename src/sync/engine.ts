@@ -1,7 +1,12 @@
 import type { TFile } from "obsidian";
 import type { TickTickClient } from "../api/client";
 import { blankTask, type NewTask, type Project, type ProjectKind, type Task } from "../api/types";
-import { listSkipReason, routingForKind, type TickTickSyncSettings } from "../settings";
+import {
+	hasSyncedBefore,
+	listSkipReason,
+	routingForKind,
+	type TickTickSyncSettings,
+} from "../settings";
 import { NoteRepository, parentFolder, taskNotePath } from "../vault/notes";
 import { applyFieldModes } from "./fieldModes";
 import {
@@ -126,6 +131,26 @@ interface RemoteRecord {
 	snapshot: TaskSnapshot;
 }
 
+/**
+ * One task's settled action, held back until the whole batch has been counted.
+ *
+ * Everything `execute` needs travels with it, so deciding and doing can be two
+ * passes rather than one — which is what makes a cap able to refuse a batch
+ * instead of stopping half way through writing it.
+ */
+interface PlannedTask {
+	action: SyncAction;
+	taskId: string;
+	entry?: SyncEntry;
+	localNote?: LocalNote;
+	remoteRecord?: RemoteRecord;
+}
+
+/** Whether carrying out this action would put a new note in the vault. */
+function createsNote(action: SyncAction): boolean {
+	return action.kind === "createLocal" || action.kind === "restoreLocal";
+}
+
 /** Parent and child relationships, resolved across every task in one pass. */
 interface TaskLinkIndex {
 	contextFor: (task: Task) => NoteContext;
@@ -193,6 +218,15 @@ export class SyncEngine {
 	 */
 	private occurrences = new Map<string, RoutedOccurrence>();
 
+	/**
+	 * Whether this vault had ever completed a sync when this pass began.
+	 *
+	 * Read once, before anything touches the store: adoption and the missing-pass
+	 * bookkeeping both write entries while a pass runs, so asking later would
+	 * have a first sync answer "yes" to its own work.
+	 */
+	private syncedBefore = false;
+
 	/** Occurrence notes created this pass, counted against the cap. */
 	private occurrenceNotes = 0;
 
@@ -215,6 +249,7 @@ export class SyncEngine {
 		const report = emptyReport();
 
 		try {
+			this.syncedBefore = hasSyncedBefore(this.deps.store.raw);
 			const projects = await this.loadProjects();
 			// Names for every list, including the skipped ones: a note whose list is
 			// not being synced still has to resolve to that list rather than to
@@ -851,31 +886,118 @@ export class SyncEngine {
 			...store.entries.map((entry) => entry.taskId),
 		]);
 
+		// Every task's action is settled before any of them is carried out.
+		// Creating notes is the one pull-side operation that multiplies, and a cap
+		// that counts only what it has already written cannot refuse a batch — it
+		// can only stop part way, leaving a vault half-populated with notes nobody
+		// can tell from the ones that belong there.
+		const planned: PlannedTask[] = [];
 		for (const taskId of taskIds) {
 			try {
-				await this.reconcileOne({
+				const step = await this.reconcileOne({
 					taskId,
 					remote,
 					localById,
-					projectNames,
 					report,
 					syncedProjects,
 				});
+				if (step) planned.push(step);
 			} catch (error) {
 				report.errors.push(`Task ${taskId}: ${describeError(error)}`);
 			}
 		}
+
+		for (const step of this.withinNoteCap(planned, report)) {
+			try {
+				await this.execute({ ...step, projectNames, report });
+			} catch (error) {
+				report.errors.push(`Task ${step.taskId}: ${describeError(error)}`);
+			}
+		}
 	}
 
+	/**
+	 * The planned actions that may run, with note creation refused when the
+	 * number of new notes says the matching has broken rather than that there is
+	 * new work.
+	 *
+	 * The whole batch goes or none of it does. Writing the first N and dropping
+	 * the rest would leave the vault in a state that is harder to reason about
+	 * than either extreme: some duplicates present, the rest arriving a few at a
+	 * time on every later pass, and no single place to undo it from.
+	 *
+	 * Only creation is refused. The updates and deletions planned alongside it
+	 * concern tasks that already have notes, so they cannot multiply, and holding
+	 * them back would punish the rest of the vault for one broken rule.
+	 */
+	private withinNoteCap(planned: PlannedTask[], report: SyncReport): PlannedTask[] {
+		const cap = this.deps.settings.maxNewNotesPerSync;
+		if (cap <= 0) return planned;
+
+		const creations = planned.filter((step) => createsNote(step.action)).length;
+		if (creations <= cap) return planned;
+
+		// A first sync of a real account legitimately creates a note for every
+		// task in it, so a cap that refused one would be wrong on the only pass
+		// where being wrong is guaranteed — and a number that fires when nothing
+		// is broken just gets raised until it never fires at all.
+		//
+		// The store settles it, and it can only answer this one way: a task looks
+		// new here because nothing local claims it, and before the first sync
+		// nothing local claims anything. There is no matching yet that could have
+		// broken. Afterwards there is, and a batch this size means notes that used
+		// to be recognised no longer are.
+		//
+		// Resetting the sync state also reads as a first sync, and for "Rebuild
+		// every note" that is exactly right — a note per task is what was asked
+		// for. After a plain reset the notes are still on disk carrying their task
+		// ids, so they are matched by id and nothing looks new either. The one gap
+		// is a reset whose notes have *also* stopped being discovered, and from
+		// here that is genuinely indistinguishable from a fresh install: no ids
+		// recorded, no notes found, every task unclaimed. Erring towards writing
+		// the notes is the recoverable half of that choice.
+		if (!this.syncedBefore) {
+			this.deps.log("First sync of this vault, so the new-note limit does not apply", {
+				notes: creations,
+				cap,
+			});
+			return planned;
+		}
+
+		report.errors.push(
+			`${creations} TickTick tasks look like they need a new note, which is more than the limit ` +
+				`of ${cap}. No notes were created. This vault has synced before, so those tasks had ` +
+				"notes and stopped being matched to them — check the task ID property and the task " +
+				"marker are still what settings say, and that the task folder has not moved. Raising " +
+				"the limit would create a duplicate note for every one of them.",
+		);
+		this.deps.log("Refused to create notes", {
+			creations,
+			cap,
+			examples: planned
+				.filter((step) => createsNote(step.action))
+				.slice(0, 10)
+				.map((step) => step.remoteRecord?.task.title ?? step.taskId),
+		});
+
+		return planned.filter((step) => !createsNote(step.action));
+	}
+
+	/**
+	 * Settles what should happen to one task, without doing any of it.
+	 *
+	 * Returns nothing when the answer is "leave this alone" — including every
+	 * case that needs saying so in the report, since a task that is being
+	 * skipped is decided here and never reaches {@link execute}.
+	 */
 	private async reconcileOne(context: {
 		taskId: string;
 		remote: Map<string, RemoteRecord>;
 		localById: Map<string, LocalNote>;
-		projectNames: Map<string, string>;
 		report: SyncReport;
 		syncedProjects: Set<string>;
-	}): Promise<void> {
-		const { taskId, remote, localById, projectNames, report, syncedProjects } = context;
+	}): Promise<PlannedTask | undefined> {
+		const { taskId, remote, localById, report, syncedProjects } = context;
 		const { store, settings, notes } = this.deps;
 
 		if (store.isTombstoned(taskId)) return;
@@ -1038,15 +1160,7 @@ export class SyncEngine {
 			},
 		);
 
-		await this.execute({
-			action,
-			taskId,
-			entry,
-			localNote,
-			remoteRecord,
-			projectNames,
-			report,
-		});
+		return { action, taskId, entry, localNote, remoteRecord };
 	}
 
 	private async execute(context: {

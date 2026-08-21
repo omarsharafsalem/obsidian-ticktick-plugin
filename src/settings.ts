@@ -429,6 +429,24 @@ export interface TickTickSyncSettings {
 	maxNewTasksPerSync: number;
 
 	/**
+	 * Most notes one sync may create from TickTick tasks before it stops.
+	 *
+	 * The mirror of {@link maxNewTasksPerSync}, and it multiplies for the same
+	 * reason: a task the pass fails to match to its note looks like a task with
+	 * no note, so one broken rule fills the vault with duplicates that then have
+	 * to be found by hand. Zero disables the limit.
+	 *
+	 * Higher than the task limit because a pull is noisier than a push — a newly
+	 * selected list, a completed backfill and a repeating task's occurrences all
+	 * arrive in one go — while the failure this guards against produces hundreds
+	 * rather than dozens.
+	 *
+	 * It does not apply to a vault's first sync, which legitimately creates a
+	 * note for every task in the account. See the engine for why that is safe.
+	 */
+	maxNewNotesPerSync: number;
+
+	/**
 	 * Most TickTick tasks one sync may delete before it stops.
 	 *
 	 * Deleting cannot be undone from here, and the trigger is a note being
@@ -554,6 +572,7 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	dateProperties: "datetime",
 	showTimesIn: "local",
 	maxNewTasksPerSync: 20,
+	maxNewNotesPerSync: 50,
 	maxDeletedTasksPerSync: 10,
 	syncCompletedTasks: false,
 	properties: { ...DEFAULT_PROPERTIES },
