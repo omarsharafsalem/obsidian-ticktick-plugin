@@ -317,6 +317,26 @@ export class SyncEngine {
 				// it as read makes every note behind that one failure look deleted.
 				syncedProjects: listed,
 			});
+			// Remote content reaching a code path. Templater executes <% … %> in a
+			// note's body; a TickTick task carrying that syntax is arbitrary
+			// JavaScript arriving from outside the vault. It cannot run today —
+			// Templater's file-creation trigger only fires on an EMPTY body, and
+			// every note this plugin writes carries the synced-region marker — but
+			// that safety is accidental, and one toggle or a blank marker removes
+			// it. Naming it is the honest guard; silently rewriting a task's text
+			// would be worse (audit found this 23 Aug 2026).
+			for (const record of remote.values()) {
+				const text = `${record.task.title} ${record.task.content ?? ""}`;
+				if (text.includes("<%")) {
+					report.errors.push(
+						`Task "${record.task.title}" contains Templater syntax (<% … %>). Its note is ` +
+							"safe as configured, but do not enable Templater's 'trigger on new file " +
+							"creation' or blank the synced-region marker while it exists — that " +
+							"combination would execute it.",
+					);
+				}
+			}
+
 			await this.createUnlinkedNotes(local, remote, listed, report);
 			await this.logCompletedOccurrences(report);
 
