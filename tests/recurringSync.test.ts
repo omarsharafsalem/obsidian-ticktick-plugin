@@ -239,6 +239,18 @@ describe("a repeating task that recurs too often for a note each", () => {
 		expect(body).toContain("- 2026-08-18");
 	});
 
+	// The counters must move in the SAME write as the log they summarise — they
+	// used to be computed only during task-triggered rewrites and lagged one
+	// rewrite behind, so the Brief and the weekly insight read stale counts
+	// (found live, 23 Aug 2026).
+	it("stamps sessions_done and last_session in the same write as the log", async () => {
+		await world.run();
+
+		const body = world.app.body("Tasks/Personal/Water the plants.md");
+		expect(body).toContain("sessions_done: 1");
+		expect(body).toContain("last_session: 2026-08-18");
+	});
+
 	// The whole reason the log lives in its own section: a re-sync has to produce
 	// exactly the same lines, or every pass grows the note.
 	it("writes the same log however many times it syncs", async () => {
