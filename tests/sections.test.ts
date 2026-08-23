@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { normaliseSection, normaliseTask, serialiseTask } from "../src/api/openApi";
 import { blankTask, type Task } from "../src/api/types";
 import { DEFAULT_PROPERTIES, DEFAULT_SETTINGS } from "../src/settings";
-import { DEFAULT_MAPPER_OPTIONS, noteToTask, taskToNote } from "../src/sync/mapper";
+import { DEFAULT_MAPPER_OPTIONS, noteToTask, resolveTitle, taskToNote } from "../src/sync/mapper";
 import { dedupeFolders, folderForTask, resolveBinding } from "../src/sync/engine";
 
 const P = DEFAULT_PROPERTIES;
@@ -151,6 +151,19 @@ describe("a title a filename cannot hold", () => {
 		expect(parse({ [P2.title]: "Read: chapter 3/4" }, "Read- chapter 3-4").title).toBe(
 			"Read: chapter 3/4",
 		);
+	});
+
+	// Twenty tasks sharing a title produce "… 2" … "… 20" on disk. Taking those
+	// as intent renamed all twenty in TickTick, numbered backwards through the
+	// calendar (seen live, 23 Aug 2026).
+	it("does not read a collision suffix as a rename", () => {
+		expect(resolveTitle("Arabic — 20 min 2", "Arabic — 20 min")).toBe("Arabic — 20 min");
+		expect(resolveTitle("Arabic — 20 min 16", "Arabic — 20 min")).toBe("Arabic — 20 min");
+	});
+
+	// A real rename changes more than the counter, and must still win.
+	it("still lets a rename that is not just a number win", () => {
+		expect(resolveTitle("Arabic — 40 min", "Arabic — 20 min")).toBe("Arabic — 40 min");
 	});
 
 	it("still lets a genuine rename win", () => {

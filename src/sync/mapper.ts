@@ -357,8 +357,24 @@ export function sanitiseFilename(title: string): string {
  * differs is a genuine rename, and then the filename is the intent.
  */
 export function resolveTitle(filenameTitle: string, knownTitle?: string): string {
-	if (knownTitle && sanitiseFilename(knownTitle) === filenameTitle) return knownTitle;
+	if (!knownTitle) return filenameTitle;
+	const sanitised = sanitiseFilename(knownTitle);
+	if (sanitised === filenameTitle) return knownTitle;
+
+	// A collision suffix looks exactly like a rename: twenty tasks legitimately
+	// sharing a title produce "… 2" … "… 20" on disk, and taking the filename as
+	// intent renamed all twenty in TickTick — numbered, and backwards (seen live,
+	// 23 Aug 2026, on a repeating study block). A trailing number over a title
+	// that is otherwise unchanged is the vault avoiding a clash, not the user
+	// saying something. A real rename changes more than the counter.
+	if (new RegExp(`^${escapeForRegExp(sanitised)} \\d+$`).test(filenameTitle)) return knownTitle;
+
 	return filenameTitle;
+}
+
+/** Escapes a string for literal use inside a RegExp. */
+function escapeForRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** True when the filename alone cannot round-trip the title. */
