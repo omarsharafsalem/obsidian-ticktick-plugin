@@ -801,8 +801,22 @@ export class SyncEngine {
 					continue;
 				}
 
+				// The counters live in frontmatter and were computed only during
+				// task-triggered rewrites, so they lagged one rewrite behind the log
+				// they summarise — the insight layer read stale counts (found live,
+				// 23 Aug 2026). The log and its summary now move in the same write.
+				const dates = merged
+					.map((line) => /(\d{4}-\d{2}-\d{2})/.exec(line)?.[1])
+					.filter((d): d is string => Boolean(d))
+					.sort();
+				const counted: Record<string, unknown> = { ...note.frontmatter };
+				if (dates.length > 0) {
+					counted[settings.properties.sessionsDone] = dates.length;
+					counted[settings.properties.lastSession] = dates[dates.length - 1];
+				}
+
 				await notes.write(file, {
-					frontmatter: note.frontmatter,
+					frontmatter: counted,
 					body: buildBody(parsed.content, parsed.items, {
 						marker: settings.syncedRegionMarker,
 						privateBody: parsed.privateBody,
