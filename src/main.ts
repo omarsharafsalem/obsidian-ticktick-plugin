@@ -128,6 +128,10 @@ export default class TickTickSyncPlugin extends Plugin {
 		const nudge = debounce(() => this.scheduleSoon(), 5000, true);
 		this.registerEvent(
 			this.app.vault.on("modify", (file) => {
+				// The plugin's own writes land here too, and an own write is not a
+				// user edit — nudging on it is how a sync schedules the next sync.
+				// Belt to the skip-identical-writes braces in NoteRepository.
+				if (this.syncInFlight) return;
 				if (file instanceof TFile && this.isTaskNote(file)) nudge();
 			}),
 		);

@@ -78,7 +78,8 @@ export class NoteRepository {
 	 * removed; every other key is left exactly as the user wrote it.
 	 */
 	async write(file: TFile, note: NoteContent): Promise<void> {
-		const existing = splitFrontmatter(await this.app.vault.read(file));
+		const raw = await this.app.vault.read(file);
+		const existing = splitFrontmatter(raw);
 		const managed = new Set<string>(Object.values(this.properties));
 
 		const merged: Record<string, unknown> = {};
@@ -87,7 +88,15 @@ export class NoteRepository {
 		}
 		Object.assign(merged, note.frontmatter);
 
-		await this.app.vault.modify(file, joinFrontmatter({ frontmatter: merged, body: note.body }));
+		const next = joinFrontmatter({ frontmatter: merged, body: note.body });
+		// A byte-identical write is not a write. Writing it anyway fires the
+		// vault's modify event, which the after-edit nudge hears as a user edit,
+		// which schedules another sync, which writes identically again — observed
+		// live on 23 Aug 2026 as a self-sustaining ~19s sync loop. Skipping the
+		// no-op breaks the cycle at its root and costs nothing.
+		if (next === raw) return;
+
+		await this.app.vault.modify(file, next);
 	}
 
 	async create(path: string, note: NoteContent): Promise<TFile> {
