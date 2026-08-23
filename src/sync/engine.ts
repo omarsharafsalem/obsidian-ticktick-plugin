@@ -600,7 +600,17 @@ export class SyncEngine {
 
 				// A note sitting in a folder mapped to a list belongs to that list,
 				// so dragging it between mapped folders moves the task in TickTick.
-				const folderList = listForPath(file.path);
+				//
+				// A folder mapped to a SECTION means "the parent list, filed in that
+				// section" — the settings tab writes section rows into the same
+				// mapping, and treating the section id as a list id sent moveTask
+				// calls at a column, which no backend accepts. Observed live on
+				// 23 Aug 2026 as a sync hung in retry loops.
+				const folderMapping = listForPath(file.path);
+				const mappedSectionList = folderMapping
+					? this.sectionLists.get(folderMapping)
+					: undefined;
+				const folderList = mappedSectionList ?? folderMapping;
 				const projectId = folderList ?? parsed.projectId ?? "";
 				if (folderList && folderList !== parsed.projectId) {
 					this.deps.log("Note is in a folder mapped to another list", {
@@ -1294,7 +1304,15 @@ export class SyncEngine {
 					// while the note claims otherwise — so it moves first.
 					const from = remoteRecord.task.projectId;
 					const to = merged.projectId;
-					if (to && from && to !== from) {
+					// The Inbox answers to two ids — the reserved one it is listed
+					// under and the account's real one its tasks carry. Comparing
+					// them raw re-"moved" every Inbox task on every sync (observed
+					// 23 Aug 2026, one log line per task per pass, forever).
+					const same =
+						to === from ||
+						this.inboxAliases.get(from ?? "") === to ||
+						this.inboxAliases.get(to ?? "") === from;
+					if (to && from && !same) {
 						await client.moveTask(taskId, from, to);
 						this.deps.log("Moved task to another list", { taskId, from, to });
 					}
