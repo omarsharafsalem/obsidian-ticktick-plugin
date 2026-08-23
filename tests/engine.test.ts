@@ -331,6 +331,27 @@ describe("when the completed listing could not be read", () => {
 		expect(context.vault.paths).toEqual([NOTE_PATH]);
 	});
 
+	// The 23 Aug 2026 data loss. A note pointed at a seconds-old project note the
+	// metadata cache had not indexed: its list came back unresolvable, its id was
+	// in no fetched list and no state, and "couldn't look" was read as "looked
+	// and found nothing" — the note was archived, and two passes later the
+	// "missing" note deleted the real task. An unknown id on a note whose list
+	// cannot even be resolved is left alone and reported, never archived.
+	it("leaves alone a note whose task id and list are both unknown", async () => {
+		const context = harness();
+		context.vault.seed(
+			"Tasks/Planning the audit.md",
+			"---\nnote_type: task\nticktick_task_id: ghost-1\nproject: \"[[Nowhere Home]]\"\n---\nbody\n",
+		);
+
+		const report = await context.engine.sync();
+		await context.engine.sync();
+
+		expect(context.vault.paths).toContain("Tasks/Planning the audit.md");
+		expect(context.client.deleted).toEqual([]);
+		expect(report.errors.join(" ")).toContain("ghost-1");
+	});
+
 	it("archives that same note once the completed listing works", async () => {
 		const context = harness();
 		context.client.tasks.set("p1", [task()]);

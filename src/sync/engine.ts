@@ -1159,6 +1159,32 @@ export class SyncEngine {
 			return;
 		}
 
+		// A note carrying a task id this pass knows nothing about — no fetched
+		// task, no state entry, no tombstone — AND whose own list could not even be
+		// resolved, is not evidence of a deletion. The guard above already spares
+		// notes whose list is known and unsynced; this spares the unresolvable
+		// remainder. It is how a live task's note went to the archive on 23 Aug
+		// 2026: the note's project link pointed at a seconds-old project note the
+		// metadata cache had not indexed, the list came back unresolvable, and
+		// "couldn't look" was read as "looked and found nothing" — two passes
+		// later the "missing" note took the real task with it. Absence is only
+		// meaningful where we actually looked.
+		if (
+			localNote?.taskId &&
+			!remoteRecord &&
+			!entry &&
+			!localNote.snapshot.projectId &&
+			!this.deps.store.isTombstoned(taskId)
+		) {
+			report.errors.push(
+				`"${localNote.file.basename}" carries task id ${taskId}, which is not in any ` +
+					"synced list and not in the sync state. The note was left untouched — if its " +
+					"list should sync, turn it on in Lists to sync; if the id is stale, remove " +
+					"the property.",
+			);
+			return;
+		}
+
 		const base = entry?.base;
 		const masked =
 			localNote && remoteRecord
