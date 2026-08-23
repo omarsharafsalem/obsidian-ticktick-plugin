@@ -58,6 +58,8 @@ export default class TickTickSyncPlugin extends Plugin {
 
 		this.addSettingTab(new TickTickSettingTab(this.app, this));
 
+		this.watchSettingsFile();
+
 		this.addRibbonIcon("checkmark", "Sync TickTick", () => void this.runSync());
 
 		this.addCommand({
@@ -156,8 +158,59 @@ export default class TickTickSyncPlugin extends Plugin {
 
 	async persist(): Promise<void> {
 		const data: PersistedData = { settings: this.settings, syncState: this.store.raw };
+		// The watcher must not react to the plugin's own writes — only to edits
+		// made from outside. The timestamp outlives the write because the file
+		// event arrives after saveData resolves.
+		this.ownWriteAt = Date.now();
 		await this.saveData(data);
 	}
+
+	/** When the plugin itself last wrote data.json; watcher events near it are ours. */
+	private ownWriteAt = 0;
+
+	/**
+	 * Reload settings automatically when data.json is edited from outside.
+	 *
+	 * The file is the plugin's real interface for anything the settings tab
+	 * cannot express — and before this watcher, an external edit raced the
+	 * plugin's own saves: whichever wrote last won, and on 22–23 Aug 2026 that
+	 * race silently discarded the same configuration four times in one evening,
+	 * each loss surfacing later as tasks in the wrong list. Now the edit simply
+	 * takes effect within a moment, announced by a Notice.
+	 *
+	 * Own writes are ignored via the timestamp above; edits arriving while a
+	 * sync runs are deferred until it finishes rather than swapped mid-pass.
+	 */
+	private watchSettingsFile(): void {
+		const adapter = this.app.vault.adapter as { basePath?: string };
+		if (!adapter.basePath || !this.manifest.dir) return; // mobile, or unexpected host
+		let fs: typeof import("fs");
+		try {
+			fs = require("fs");
+		} catch {
+			return;
+		}
+		const path = `${adapter.basePath}/${this.manifest.dir}/data.json`;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const watcher = fs.watch(path, () => {
+				if (Date.now() - this.ownWriteAt < 2000) return;
+				if (timer) clearTimeout(timer);
+				timer = setTimeout(() => {
+					if (this.syncInFlight) {
+						this.reloadAfterSync = true;
+						return;
+					}
+					void this.reloadSettings();
+				}, 500);
+			});
+			this.register(() => watcher.close());
+		} catch {
+			// A missing file or an unsupported platform just means no watcher.
+		}
+	}
+
+	private reloadAfterSync = false;
 
 	async saveSettings(): Promise<void> {
 		await this.persist();
@@ -425,6 +478,10 @@ export default class TickTickSyncPlugin extends Plugin {
 			return null;
 		} finally {
 			this.syncInFlight = false;
+			if (this.reloadAfterSync) {
+				this.reloadAfterSync = false;
+				void this.reloadSettings();
+			}
 		}
 	}
 
