@@ -1750,6 +1750,20 @@ export class SyncEngine {
 	private desiredNotePath(task: Task, file: TFile, projectNames: Map<string, string>): string {
 		const { settings } = this.deps;
 
+		// Archiving outranks everything below, including vault-wide discovery's
+		// leave-it-where-it-is rule — that rule protects a *placement decision*,
+		// and a completed task's move to the archive is not a placement being
+		// revisited, it is the lifecycle ending. Checked first because the
+		// discovery early-return below otherwise swallows it: with discovery on,
+		// completed notes simply never archived (observed 23 Aug 2026 — two
+		// features each correct alone, wrong together).
+		if (task.status === "completed" && settings.completedHandling === "archive") {
+			return taskNotePath(task.title, {
+				taskFolder: settings.archiveFolder,
+				folderPerProject: false,
+			});
+		}
+
 		// Once notes are found by property rather than by folder, where a note
 		// lives is the user's decision — dragging it back to a computed path
 		// would undo a deliberate move. Only the filename follows the title.

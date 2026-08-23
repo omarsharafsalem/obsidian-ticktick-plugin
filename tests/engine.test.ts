@@ -302,6 +302,26 @@ describe("newest wins", () => {
  * The completed listing is the evidence that separates "finished" from
  * "deleted". Without it, absence from the open listing means nothing at all.
  */
+describe("archiving a completed task while notes are discovered anywhere", () => {
+	// Two features, each correct alone, wrong together (23 Aug 2026): vault-wide
+	// discovery's "never relocate a note" rule fired before the completed→archive
+	// override was consulted, so completed notes silently never archived.
+	it("still moves the note to the archive folder", async () => {
+		const context = harness({
+			discoverAnywhere: true,
+			completedHandling: "archive",
+			archiveFolder: "🗄️ Archive",
+		});
+		context.client.tasks.set("p1", [task()]);
+		await context.engine.sync();
+
+		context.client.tasks.set("p1", [{ ...task(), status: "completed" as const }]);
+		await context.engine.sync();
+
+		expect(context.vault.paths).toEqual(["🗄️ Archive/Buy milk.md"]);
+	});
+});
+
 describe("when the completed listing could not be read", () => {
 	it("leaves a tracked note alone", async () => {
 		const context = harness();
