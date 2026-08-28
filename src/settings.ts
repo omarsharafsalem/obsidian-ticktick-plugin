@@ -386,6 +386,20 @@ export interface TickTickSyncSettings {
 	listPages: Record<string, string>;
 
 	/**
+	 * Only tasks carrying one of these tags become notes.
+	 *
+	 * Empty means every task in a synced list crosses — the old behaviour. With
+	 * tags listed, TickTick stays the place everything is dumped and the vault
+	 * receives only what was marked as belonging there: a reminder to ring
+	 * someone needs no note; a project does.
+	 *
+	 * **A task that loses its tag keeps its note.** The filter decides what
+	 * ARRIVES, never what stays. Anything already linked goes on syncing both
+	 * ways — absence of a tag is not an instruction to delete.
+	 */
+	requiredTags: string[];
+
+	/**
 	 * Frontmatter property by which a project note claims a TickTick list.
 	 *
 	 * A note saying `ticktick_list_id: <id>` binds that list to itself, and every
@@ -554,6 +568,7 @@ export const DEFAULT_SETTINGS: TickTickSyncSettings = {
 	listKinds: { TASK: { ...DEFAULT_LIST_KINDS.TASK }, NOTE: { ...DEFAULT_LIST_KINDS.NOTE } },
 	listFolders: {},
 	listPages: {},
+	requiredTags: [],
 	listBindingProperty: "ticktick_list_id",
 	sectionBindingProperty: "ticktick_section_id",
 	deletedTaskFolder: "🗄️ Archive",

@@ -322,6 +322,42 @@ describe("archiving a completed task while notes are discovered anywhere", () =>
 	});
 });
 
+describe("only tagged tasks become notes", () => {
+	// TickTick is where everything is dumped; the vault should receive only what
+	// was marked as belonging there (Omar, 28 Aug 2026, on day one of real use).
+	it("skips a task carrying none of the required tags", async () => {
+		const context = harness({ requiredTags: ["🧩project"] });
+		context.client.tasks.set("p1", [task()]);
+
+		await context.engine.sync();
+
+		expect(context.vault.paths).toEqual([]);
+	});
+
+	it("creates a note for a task carrying one of them", async () => {
+		const context = harness({ requiredTags: ["🧩project", "📝note"] });
+		context.client.tasks.set("p1", [{ ...task(), tags: ["📝note"] }]);
+
+		await context.engine.sync();
+
+		expect(context.vault.paths).toEqual([NOTE_PATH]);
+	});
+
+	// The guard that matters. Removing a tag is not an instruction to delete —
+	// the filter decides what ARRIVES, never what stays.
+	it("keeps the note of a task that later loses its tag", async () => {
+		const context = harness({ requiredTags: ["🧩project"] });
+		context.client.tasks.set("p1", [{ ...task(), tags: ["🧩project"] }]);
+		await context.engine.sync();
+		expect(context.vault.paths).toEqual([NOTE_PATH]);
+
+		context.client.tasks.set("p1", [{ ...task(), tags: [] }]);
+		await context.engine.sync();
+
+		expect(context.vault.paths).toEqual([NOTE_PATH]);
+	});
+});
+
 describe("when the completed listing could not be read", () => {
 	it("leaves a tracked note alone", async () => {
 		const context = harness();

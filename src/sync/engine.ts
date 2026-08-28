@@ -1186,6 +1186,20 @@ export class SyncEngine {
 			if (!this.mayCreateOccurrenceNote(report)) return;
 		}
 
+		// Only tagged tasks become notes, when the vault asks for that. TickTick is
+		// where everything gets dumped; the vault should receive what was marked as
+		// belonging there — a reminder to ring someone needs no note.
+		//
+		// The gate is on ARRIVAL only. A task that already has a note keeps it and
+		// keeps syncing whatever its tags say now: removing a tag is not an
+		// instruction to delete, and reading it as one would be this plugin's
+		// oldest mistake wearing a new hat.
+		const required = settings.requiredTags.map((t) => t.trim()).filter(Boolean);
+		if (required.length > 0 && !localNote && !entry && remoteRecord) {
+			const tags = remoteRecord.task.tags ?? [];
+			if (!tags.some((tag) => required.includes(tag.trim()))) return;
+		}
+
 		// Completed tasks are fetched for evidence. Turning one into a note is a
 		// different question, and off by default: a first sync should not backfill
 		// months of finished work nobody asked for.
